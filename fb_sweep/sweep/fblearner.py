@@ -17,7 +17,7 @@ def main(get_grid, postprocess_hyperparams, args):
             "fblearner backend requires --manifold-has-user-data be specified explicitly"
         )
     try:
-        from fvcore.fb.manifold import ManifoldPathHandler
+        from iopath.fb.manifold import ManifoldPathHandler
 
         PathManager.register_handler(
             ManifoldPathHandler(

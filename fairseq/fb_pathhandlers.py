@@ -13,7 +13,7 @@ import boto3
 from boto3.s3.transfer import TransferConfig
 import botocore
 import datetime as dt
-from fvcore.common.file_io import (
+from iopath.common.file_io import (
     file_lock,
     get_cache_dir,
     PathHandler,

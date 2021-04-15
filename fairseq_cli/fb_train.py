@@ -16,7 +16,7 @@ from fairseq import distributed_utils, options
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.file_io import PathManager
 from fairseq_cli.train import main as fairseq_train_main
-from fvcore.fb.manifold import ManifoldPathHandler
+from iopath.fb.manifold import ManifoldPathHandler
 
 
 logger = logging.getLogger(__file__)
