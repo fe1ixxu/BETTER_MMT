@@ -429,11 +429,21 @@ has run a marathon in less than two hours."""
 Kenyan ran in Vienna, Austria. It was not an officially sanctioned world record.""",
             )
 
-    def test_cnn_large_inputs(self):
-        # BartModel.generate threw an error because of prefix tokens size mismatch
-        bart = torch.hub.load("pytorch/fairseq", "bart.large.cnn")
-        inputs = [bart.encode(". " * 40)] * 50
-        bart.generate(inputs, beam=1, max_length=10)
+    def test_bart_cnn_output_order(self):
+        # BartModel.generate used to return outputs in the wrong order
+        bart = torch.hub.load("pytorch/fairseq", "bart.large.cnn").eval()
+        input_sentences = ["This sentence is the longest sentence that is used in this unit test.", "This is short.",
+                           "This sentence is in the middle."]
+        inputs = [bart.encode(x) for x in input_sentences]
+        outputs = bart.generate(inputs, beam=1, max_length=10)
+        self.assertEqual(
+            bart.decode(outputs[0][0]["tokens"]),
+            "This sentence is the longest sentence that is used in this unit test.",
+        )
+        self.assertEqual(bart.decode(outputs[1][0]["tokens"]), "This is short.")
+        self.assertEqual(
+            bart.decode(outputs[2][0]["tokens"]), "This sentence is in the middle."
+        )
 
 
 if __name__ == "__main__":
