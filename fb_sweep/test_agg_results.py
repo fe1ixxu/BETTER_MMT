@@ -19,7 +19,7 @@ class TestAggResults(unittest.TestCase):
             test_data_glob, log_pattern="train", interactive=True
         )
         assert train_df.ppl.notnull().all()
-        assert train_df.shape[1] == train_inner_df.shape[1] == 14
+        assert train_df.shape[1] == train_inner_df.shape[1] == 15
 
     def test_find_common_prefix(self):
         assert find_common_prefix([]) == ""
