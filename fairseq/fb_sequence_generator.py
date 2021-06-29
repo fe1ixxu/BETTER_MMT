@@ -8,7 +8,6 @@ from typing import Dict, List, Optional
 
 import torch
 from fairseq.sequence_generator import EnsembleModel
-from fairseq.sequence_generator import SequenceGenerator
 from torch import Tensor
 
 
@@ -104,7 +103,3 @@ class FBEnsembleModelWithFork(EnsembleModel):
             model.decoder.reorder_incremental_state_scripting(
                 incremental_states[i], new_order
             )
-
-
-class FBSequenceGenerator(SequenceGenerator):
-    pass
