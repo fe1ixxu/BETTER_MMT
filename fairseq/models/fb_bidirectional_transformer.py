@@ -16,24 +16,20 @@ from fairseq.models import (
     register_model,
     register_model_architecture,
 )
-from fairseq.models.transformer import (
-    Embedding,
-    LayerNorm,
-    Linear,
-    PositionalEmbedding,
-    TransformerDecoderLayer,
-)
+from fairseq.models.transformer import Embedding, Linear
 from fairseq.modules import (
     AdaptiveSoftmax,
     CharacterTokenEmbedder,
     FairseqDropout,
+    LayerNorm,
+    PositionalEmbedding,
     SinusoidalPositionalEmbedding,
+    TransformerDecoderLayer,
 )
 from fairseq.modules.character_token_embedder import CHAR_PAD_IDX
 from fairseq.modules.fb_bidirectional_multihead_attention import (
     BidirectionalMultiheadSelfAttention,
 )
-
 
 logger = logging.getLogger(__name__)
 

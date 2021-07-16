@@ -18,10 +18,10 @@ from fairseq.models.model_utils import (
 from fairseq.models.transformer import (
     Embedding,
     TransformerDecoder,
-    TransformerDecoderLayer,
     TransformerEncoder,
     TransformerModel,
 )
+from fairseq.modules import TransformerDecoderLayer
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 from torch import Tensor
 
