@@ -27,11 +27,7 @@ def _date_list_from_arg(date_ranges: str) -> List[Tuple[str, str]]:
 
 
 def _shuffle(l: List) -> List:
-    shuffled_indices = np.random.choice(
-        list(range(len(l))),
-        len(l),
-        replace=False,
-    )
+    shuffled_indices = np.random.choice(list(range(len(l))), len(l), replace=False,)
     return [l[i] for i in shuffled_indices]
 
 
@@ -92,9 +88,7 @@ class BaseConversationTask(LegacyFairseqTask):
             SpecialConversationSymbols.EOS1,
         ]
         dictionary = Dictionary(extra_special_symbols=symbols)
-        dictionary.add_from_file(
-            f=os.path.join(args.dictionary, "dict.txt"),
-        )
+        dictionary.add_from_file(f=os.path.join(args.dictionary, "dict.txt"),)
         logger.info("dictionary: {} types".format(len(dictionary)))
 
         if args.data_loading == "stream":
@@ -137,6 +131,7 @@ class BaseConversationTask(LegacyFairseqTask):
         epoch=1,
         data_buffer_size=0,
         disable_iterator_cache=False,
+        skip_remainder_batch=False,
         grouped_shuffling=False,
         update_epoch_batch_itr=False,
     ):
@@ -183,10 +178,7 @@ class BaseConversationTask(LegacyFairseqTask):
         """
         assert isinstance(dataset, ConversationDataset)
         return iterators.StreamingEpochBatchIterator(
-            dataset=dataset,
-            epoch=epoch,
-            num_shards=num_shards,
-            shard_id=shard_id,
+            dataset=dataset, epoch=epoch, num_shards=num_shards, shard_id=shard_id,
         )
 
     def _prob_range_from_split(self, split) -> Tuple[float, float]:
@@ -281,9 +273,7 @@ class PreloadConversationTask(BaseConversationTask):
             date_ranges=date_ranges,
         )
         conversation = ConversationDataset(
-            dataset=hive_dataset,
-            dictionary=self.dictionary,
-            split_range=prob_range,
+            dataset=hive_dataset, dictionary=self.dictionary, split_range=prob_range,
         )
         self.datasets[split] = conversation
 
@@ -317,9 +307,7 @@ class StreamingConversationTask(BaseConversationTask):
             shuffle=True,
         )
         conversation = ConversationDataset(
-            dataset=hive,
-            dictionary=self.dictionary,
-            split_range=(start, end),
+            dataset=hive, dictionary=self.dictionary, split_range=(start, end),
         )
         return conversation
 
@@ -334,9 +322,7 @@ class StreamingConversationTask(BaseConversationTask):
             date_ranges=date_ranges,
         )
         conversation = ConversationDataset(
-            dataset=hive,
-            dictionary=self.dictionary,
-            split_range=(start, end),
+            dataset=hive, dictionary=self.dictionary, split_range=(start, end),
         )
         return conversation
 
