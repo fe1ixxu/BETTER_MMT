@@ -33,7 +33,7 @@ def get_grid(args):
         hyperparam("--n-layer", 16),
         hyperparam("--d-model", 410),
         hyperparam("--n-head", 10),
-        hyperparam("--d-head",  41),
+        hyperparam("--d-head", 41),
         hyperparam("--d-inner", 2100),
         hyperparam("--dropout", 0.1),
         hyperparam("--dropatt", 0.0),

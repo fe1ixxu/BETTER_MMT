@@ -82,7 +82,9 @@ def run_setup(args, config, dry_run):
     num_total_gpus = args.num_nodes * args.num_gpus
     if args.use_jobarray:
         save_dir = os.path.join(
-            args.checkpoints_dir, args.jobarray_name, f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}"
+            args.checkpoints_dir,
+            args.jobarray_name,
+            f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}",
         )
     else:
         save_dir = os.path.join(
@@ -176,7 +178,8 @@ def gen_train_command(args, env, config, destination, save_dir, save_dir_key):
                 str(datetime.date.today()),
             )
         tensorboard_logdir = os.path.join(
-            _dir, f"{args.prefix}.{save_dir_key}.ngpu{str(args.num_nodes * args.num_gpus)}"
+            _dir,
+            f"{args.prefix}.{save_dir_key}.ngpu{str(args.num_nodes * args.num_gpus)}",
         )
         train_cmd.extend(["--tensorboard-logdir", tensorboard_logdir])
     if not args.no_wandb:
@@ -187,9 +190,9 @@ def gen_train_command(args, env, config, destination, save_dir, save_dir_key):
             if "WANDB_RUN_GROUP" not in env:
                 env["WANDB_RUN_GROUP"] = args.prefix
             if "WANDB_RUN_ID" not in env:
-                env["WANDB_RUN_ID"] = (
-                    hashlib.md5(os.path.basename(save_dir).encode('utf-8')).hexdigest()
-                )
+                env["WANDB_RUN_ID"] = hashlib.md5(
+                    os.path.basename(save_dir).encode("utf-8")
+                ).hexdigest()
     for hp in config.values():
         train_cmd.extend(map(str, hp.get_cli_args()))
     return train_cmd
@@ -212,7 +215,9 @@ def gen_post_commands(args, save_dir):
     return post_cmds
 
 
-def gen_srun_command_and_str(args, env, save_dir_key, train_log, train_stderr, train_cmd, post_cmds):
+def gen_srun_command_and_str(
+    args, env, save_dir_key, train_log, train_stderr, train_cmd, post_cmds
+):
     base_srun_cmd = [
         "srun",
         "--job-name",
@@ -241,11 +246,23 @@ def gen_srun_command_and_str(args, env, save_dir_key, train_log, train_stderr, t
     srun_cmd_str = " ".join(map(shlex.quote, srun_cmd))
     for post_cmd in post_cmds:
         post_cmd_str = " ".join(map(shlex.quote, base_srun_cmd)) + f" {post_cmd}"
-        srun_cmd_str = f"({srun_cmd_str} && {post_cmd_str})" if len(srun_cmd_str) > 0 else post_cmd_str
+        srun_cmd_str = (
+            f"({srun_cmd_str} && {post_cmd_str})"
+            if len(srun_cmd_str) > 0
+            else post_cmd_str
+        )
     return srun_cmd, srun_cmd_str
 
 
-def gen_sbatch_command_and_str(args, job_name, train_log, train_stderr, destination, srun_cmd_str, array_length=None):
+def gen_sbatch_command_and_str(
+    args,
+    job_name,
+    train_log,
+    train_stderr,
+    destination,
+    srun_cmd_str,
+    array_length=None,
+):
     excluded_hosts = os.environ.get("EXCLUDED_HOSTS", None)
     included_hosts = os.environ.get("INCLUDED_HOSTS", None)
     sbatch_cmd = [
@@ -338,7 +355,9 @@ def run_batch(env, sbatch_cmd_str, sbatch_cmd):
 def write_git_commit(args, train_log):
     with open(train_log, "a") as train_log_h:
         # log most recent git commit
-        git_commit = subprocess.check_output("git log | head -n 1", shell=True, encoding="utf-8")
+        git_commit = subprocess.check_output(
+            "git log | head -n 1", shell=True, encoding="utf-8"
+        )
         print(git_commit.rstrip(), file=train_log_h)
         if args.baseline_model:
             print(f"baseline model: {args.baseline_model}", file=train_log_h)
@@ -397,7 +416,9 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
             continue
 
         # generate train command
-        train_cmd = gen_train_command(args, env, config, destination, save_dir, save_dir_key)
+        train_cmd = gen_train_command(
+            args, env, config, destination, save_dir, save_dir_key
+        )
 
         # post cmds
         post_cmds = gen_post_commands(args, save_dir)
@@ -424,13 +445,25 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
                 if not args.salloc:
                     job_name = f"{args.prefix}.{save_dir_key}"
                     sbatch_cmd, sbatch_cmd_str = gen_sbatch_command_and_str(
-                        args, job_name, train_log, train_stderr, destination, srun_cmd_str
+                        args,
+                        job_name,
+                        train_log,
+                        train_stderr,
+                        destination,
+                        srun_cmd_str,
                     )
                 else:
                     sbatch_cmd = srun_cmd
                     sbatch_cmd_str = srun_cmd_str
                 if args.dry_run:
-                    dry_run_batch(env, train_log, train_stderr, sbatch_cmd_str, sbatch_cmd, dry_run)
+                    dry_run_batch(
+                        env,
+                        train_log,
+                        train_stderr,
+                        sbatch_cmd_str,
+                        sbatch_cmd,
+                        dry_run,
+                    )
                 else:
                     write_git_commit(args, train_log)
                     with open(train_log, "a") as train_log_h:
@@ -450,17 +483,32 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
     if args.use_jobarray:
         aggregate_cmd = ""
         for i, srun_cmd_str in enumerate(srun_cmd_str_list):
-            aggregate_cmd = aggregate_cmd + BASH_IF_CLAUSE.format(index=i, srun_cmd=srun_cmd_str)
+            aggregate_cmd = aggregate_cmd + BASH_IF_CLAUSE.format(
+                index=i, srun_cmd=srun_cmd_str
+            )
         job_name = args.jobarray_name
         slurm_stdout_log = os.path.join(slurm_dir, "slrm_stdout.%j")
         slurm_stderr_log = os.path.join(slurm_dir, "slrm_stderr.%j")
         array_length = len(srun_cmd_str_list)
         sbatch_cmd, sbatch_cmd_str = gen_sbatch_command_and_str(
-            args, job_name, slurm_stdout_log, slurm_stderr_log, destination, aggregate_cmd, array_length=array_length
+            args,
+            job_name,
+            slurm_stdout_log,
+            slurm_stderr_log,
+            destination,
+            aggregate_cmd,
+            array_length=array_length,
         )
 
         if args.dry_run:
-            dry_run_batch(env, slurm_stdout_log, slurm_stderr_log, sbatch_cmd_str, sbatch_cmd, dry_run)
+            dry_run_batch(
+                env,
+                slurm_stdout_log,
+                slurm_stderr_log,
+                sbatch_cmd_str,
+                sbatch_cmd,
+                dry_run,
+            )
         else:
             job_id, stdout = run_batch(env, sbatch_cmd_str, sbatch_cmd)
             for train_log in train_log_list:

@@ -9,6 +9,7 @@ import unittest
 from io import StringIO
 
 import torch
+
 from fairseq import fb_hub
 
 
@@ -432,8 +433,11 @@ Kenyan ran in Vienna, Austria. It was not an officially sanctioned world record.
     def test_bart_cnn_output_order(self):
         # BartModel.generate used to return outputs in the wrong order
         bart = torch.hub.load("pytorch/fairseq", "bart.large.cnn").eval()
-        input_sentences = ["This sentence is the longest sentence that is used in this unit test.", "This is short.",
-                           "This sentence is in the middle."]
+        input_sentences = [
+            "This sentence is the longest sentence that is used in this unit test.",
+            "This is short.",
+            "This sentence is in the middle.",
+        ]
         inputs = [bart.encode(x) for x in input_sentences]
         outputs = bart.generate(inputs, beam=1, max_length=10)
         self.assertEqual(

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-from itertools import takewhile
-from glob import glob
 import json
-from pathlib import Path
-import re
-from typing import List, Dict
 import os
+import re
+from glob import glob
+from itertools import takewhile
+from pathlib import Path
+from typing import Dict, List
 
 try:
     import pandas as pd
@@ -27,7 +27,7 @@ def find_common_prefix(parsed_keys: List[str]) -> str:
 
 def remove_prefix(text: str, prefix: str):
     if text.startswith(prefix):
-        return text[len(prefix):]
+        return text[len(prefix) :]
     return text
 
 
@@ -40,7 +40,7 @@ def remove_common_prefix_from_keys(entry: Dict[str, str]):
 
 
 def find_last_matching_line(reversed_lns: List[str], pattern: str) -> Dict[str, str]:
-    """ Find a line with train loss in it and try to read it to json."""
+    """Find a line with train loss in it and try to read it to json."""
     matched_line = None
     for l in reversed_lns:
         if pattern in l and "epoch" in l:

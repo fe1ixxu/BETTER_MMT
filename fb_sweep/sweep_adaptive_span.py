@@ -43,7 +43,11 @@ def get_grid(args):
         hyperparam("--validate-interval-updates", 1000),
         hyperparam("--save-interval-updates", 1000),
         hyperparam("--lr-scheduler", "fixed", save_dir_key=lambda val: val),
-        hyperparam("--warmup-updates", [32000], save_dir_key=lambda val: f"wu{val}",),
+        hyperparam(
+            "--warmup-updates",
+            [32000],
+            save_dir_key=lambda val: f"wu{val}",
+        ),
         hyperparam("--batch-size-valid", batch_size_per_gpu * 2),
         hyperparam("--lr", [0.07], save_dir_key=lambda val: f"lr{val}"),
         hyperparam("--criterion", "adaptive_span_loss"),
@@ -53,7 +57,9 @@ def get_grid(args):
         hyperparam("--log-format", "json"),
         hyperparam("--log-interval", 25 if not args.local else 1),
         hyperparam(
-            "--aux-loss-scaler", [0.0000005], save_dir_key=lambda val: f"loss{val}",
+            "--aux-loss-scaler",
+            [0.0000005],
+            save_dir_key=lambda val: f"loss{val}",
         ),
     ]
 

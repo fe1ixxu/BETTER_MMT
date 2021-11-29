@@ -16,9 +16,11 @@ def get_grid(args):
         hyperparam("--fp16", save_dir_key=lambda val: "fp16"),
         hyperparam("--max-update", 50000),
         hyperparam("--task", "language_modeling"),
-        #hyperparam("--arch", "hf_gpt2", save_dir_key=lambda val: val),
+        # hyperparam("--arch", "hf_gpt2", save_dir_key=lambda val: val),
         hyperparam("--arch", "transformer_lm_gpt", save_dir_key=lambda val: val),
-        hyperparam("--share-decoder-input-output-embed", save_dir_key=lambda val: "shareemb"),
+        hyperparam(
+            "--share-decoder-input-output-embed", save_dir_key=lambda val: "shareemb"
+        ),
         hyperparam("--dropout", 0.1, save_dir_key=lambda val: f"drop{val}"),
         hyperparam("--optimizer", "adam", save_dir_key=lambda val: val),
         hyperparam(
@@ -31,13 +33,17 @@ def get_grid(args):
         hyperparam("--warmup-updates", 4000, save_dir_key=lambda val: f"warmup{val}"),
         hyperparam("--warmup-init-lr", 1e-7, save_dir_key=lambda val: f"initlr{val}"),
         hyperparam(
-            "--tokens-per-sample", tokens_per_sample, save_dir_key=lambda val: f"sampletok{val}"
+            "--tokens-per-sample",
+            tokens_per_sample,
+            save_dir_key=lambda val: f"sampletok{val}",
         ),
         hyperparam(
             "--sample-break-mode", "none", save_dir_key=lambda val: f"break{val}"
         ),
         hyperparam("--max-tokens", max_tokens, save_dir_key=lambda val: f"maxtok{val}"),
-        hyperparam("--update-freq", update_freq, save_dir_key=lambda val: f"updatefreq{val}"),
+        hyperparam(
+            "--update-freq", update_freq, save_dir_key=lambda val: f"updatefreq{val}"
+        ),
         hyperparam("--seed", [2], save_dir_key=lambda val: f"seed{val}"),
         hyperparam("--log-format", "json"),
         hyperparam("--log-interval", 25),

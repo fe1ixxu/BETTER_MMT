@@ -72,6 +72,7 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
 
     try:
         import torch_xla  # noqa
+
         tpu = True
     except ImportError:
         tpu = False
@@ -229,9 +230,7 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
     parser.add_argument(
         "--no-tensorboard", action="store_true", help="disable tensorboard logging"
     )
-    parser.add_argument(
-        "--no-wandb", action="store_true", help="disable WandB logging"
-    )
+    parser.add_argument("--no-wandb", action="store_true", help="disable WandB logging")
     parser.add_argument(
         "--post-steps",
         nargs="+",
@@ -239,8 +238,15 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         "this can be a file with the steps, or a string. some placeholders such as "
         "{job_dir} will be replaced",
     )
-    parser.add_argument('--use-jobarray', action='store_true', help="Submit sweep as job-array")
-    parser.add_argument('--jobarray-name', type=str, default=None, help="Folder name for job-array. Defaults to <jobarray_timestamp>")
+    parser.add_argument(
+        "--use-jobarray", action="store_true", help="Submit sweep as job-array"
+    )
+    parser.add_argument(
+        "--jobarray-name",
+        type=str,
+        default=None,
+        help="Folder name for job-array. Defaults to <jobarray_timestamp>",
+    )
 
     # GCP params
     parser.add_argument("--tpu", help="tpu to use")
@@ -250,10 +256,10 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
     args = parser.parse_args(input_args)
     if args.use_jobarray:
         if args.jobarray_name is None:
-            ja_hash = datetime.datetime.now().isoformat().replace(':', '_')
-            args.jobarray_name = f'jobarray_{ja_hash}'
-        assert not args.local, 'Job array should not be local'
-        assert not args.sequential, 'Cannot have both sequential and jobarray'
+            ja_hash = datetime.datetime.now().isoformat().replace(":", "_")
+            args.jobarray_name = f"jobarray_{ja_hash}"
+        assert not args.local, "Job array should not be local"
+        assert not args.sequential, "Cannot have both sequential and jobarray"
     return args
 
 
