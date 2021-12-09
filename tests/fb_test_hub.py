@@ -81,7 +81,8 @@ class TestTranslationHub(unittest.TestCase):
             )
             self.assertEqual(
                 de,
-                "PyTorch Hub ist ein vorgefertigtes Modell-Repository, das die Reproduzierbarkeit der Forschung erleichtern soll.",
+                "PyTorch Hub ist ein vorgefertigtes Modell-Repository, das die Reproduzierbarkeit der Forschung \
+                erleichtern soll.",
             )
 
 

@@ -5,21 +5,14 @@
 
 import contextlib
 import logging
-import os
 import tempfile
 import unittest
 from io import StringIO
 
 import torch
-from tests.test_binaries import (
-    create_dummy_roberta_head_data,
-    train_masked_lm,
-    train_roberta_head,
-)
 from tests.utils import (
     create_dummy_data,
     generate_main,
-    preprocess_lm_data,
     preprocess_translation_data,
     train_translation_model,
 )

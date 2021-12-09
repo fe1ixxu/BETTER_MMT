@@ -87,13 +87,13 @@ def get_grid_levenshtein(args):
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         hyperparam("--early-exit", "(6,6,6)", save_dir_key=lambda val: f"ext-{val}"),
         # general
         hyperparam("--activation-fn", "gelu", save_dir_key=lambda val: f"act-{val}"),
         # hyperparam('--max-tokens', 8192, save_dir_key=lambda val: f'b{val}'),
-        hyperparam("--max-tokens", 4096, save_dir_key=lambda val: f"b8192"),
+        hyperparam("--max-tokens", 4096, save_dir_key=lambda val: "b8192"),
         hyperparam("--update-freq", 2),
         hyperparam("--fp16", binary_flag=True),
         hyperparam("--optimizer", "adam"),
@@ -134,16 +134,16 @@ def get_grid_progressive(args):
         hyperparam(
             "--decoder-learned-pos",
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         # model specific
-        hyperparam("--passing-unk", binary_flag=True, save_dir_key=lambda val: f"pu"),
+        hyperparam("--passing-unk", binary_flag=True, save_dir_key=lambda val: "pu"),
         hyperparam("--pred-length-offset", binary_flag=True),
         # hyperparam('--sg-length-pred', binary_flag=True, save_dir_key=lambda val: f'sg' if val else f''),
         hyperparam("--output-checker", binary_flag=True),
@@ -192,13 +192,13 @@ def get_grid_nat(args):
         hyperparam(
             "--decoder-learned-pos",
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         # length prediction
         hyperparam("--pred-length-offset", binary_flag=True),
@@ -249,13 +249,13 @@ def get_grid_nacrf(args):
         hyperparam(
             "--decoder-learned-pos",
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         # length prediction
         hyperparam("--pred-length-offset", binary_flag=True),
@@ -304,13 +304,13 @@ def get_grid_inat(args):
             "--decoder-learned-pos",
             True,
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         # iterative refinement settings
         hyperparam("--train-step", 3, save_dir_key=lambda val: f"iter{val}"),
@@ -370,13 +370,13 @@ def get_grid_cmlm(args):
             "--decoder-learned-pos",
             True,
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         # length prediction
         hyperparam("--pred-length-offset", binary_flag=True),
@@ -423,18 +423,18 @@ def get_grid_insertion(args):
         hyperparam(
             "--decoder-learned-pos",
             binary_flag=True,
-            save_dir_key=lambda val: f"lp" if val else f"sp",
+            save_dir_key=lambda val: "lp" if val else "sp",
         ),
         hyperparam("--share-all-embeddings", binary_flag=True),
         hyperparam(
             "--apply-bert-init",
             binary_flag=True,
-            save_dir_key=lambda val: f"bert" if val else f"",
+            save_dir_key=lambda val: "bert" if val else "",
         ),
         hyperparam(
             "--label-tau",
             1,
-            save_dir_key=lambda val: f"tau{val}" if val < 1000 else f"uniform",
+            save_dir_key=lambda val: f"tau{val}" if val < 1000 else "uniform",
         ),
         # general
         hyperparam("--activation-fn", "gelu", save_dir_key=lambda val: f"act-{val}"),
