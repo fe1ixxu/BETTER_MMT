@@ -12,10 +12,10 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
+
 from fairseq.data import FairseqDataset, FairseqIterableDataset, data_utils, encoders
 from fairseq.data.fb_conversations.fb_special_symbols import SpecialConversationSymbols
 from fairseq.data.fb_hive_dataset import HiveDataset
-
 
 logger = logging.getLogger("fairseq.fb_conversation_dataset")
 
@@ -142,7 +142,7 @@ def _torchify(item, dictionary) -> Dict[str, Any]:
     )
     torch_item = {
         # Bound ID to 64 bit max to avoid overflow
-        "id": torch.LongTensor([item["id"] % (2 ** 63 - 1)]),
+        "id": torch.LongTensor([item["id"] % (2**63 - 1)]),
         "ntokens": ntokens,
         "net_input": {
             "src_tokens": source,

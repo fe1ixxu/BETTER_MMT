@@ -9,6 +9,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from fairseq import utils
 from fairseq.models import (
     FairseqDecoder,
@@ -325,7 +326,7 @@ class BiTransformerDecoder(FairseqDecoder):
                 self.embed_out = nn.Parameter(
                     torch.Tensor(len(dictionary), self.embed_dim)
                 )
-                nn.init.normal_(self.embed_out, mean=0, std=self.embed_dim ** -0.5)
+                nn.init.normal_(self.embed_out, mean=0, std=self.embed_dim**-0.5)
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True

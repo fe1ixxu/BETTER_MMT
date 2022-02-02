@@ -17,7 +17,6 @@ from os import SEEK_CUR, SEEK_END, SEEK_SET
 
 import _cffi_backend
 
-
 # from _soundfile import ffi as _ffi
 
 
@@ -892,7 +891,7 @@ class SoundFile(object):
     @property
     def extra_info(self):
         """Retrieve the log string generated when opening the file."""
-        info = _ffi.new("char[]", 2 ** 14)
+        info = _ffi.new("char[]", 2**14)
         _snd.sf_command(self._file, _snd.SFC_GET_LOG_INFO, info, _ffi.sizeof(info))
         return _ffi.string(info).decode("utf-8", "replace")
 

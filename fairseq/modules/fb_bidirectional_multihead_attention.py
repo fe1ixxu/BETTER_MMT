@@ -5,9 +5,10 @@
 
 import torch
 import torch.nn.functional as F
-from fairseq import utils
 from torch import nn
 from torch.nn import Parameter
+
+from fairseq import utils
 
 
 class BidirectionalMultiheadSelfAttention(nn.Module):
@@ -29,7 +30,7 @@ class BidirectionalMultiheadSelfAttention(nn.Module):
         assert (
             self.embed_dim % num_heads == 0
         ), "embed_dim must be divisible by num_heads"
-        self.scaling = self.head_dim ** -0.5
+        self.scaling = self.head_dim**-0.5
 
         self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
         if bias:
