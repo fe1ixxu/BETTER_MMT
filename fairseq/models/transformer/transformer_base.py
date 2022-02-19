@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -18,6 +19,8 @@ from fairseq.models.transformer import (
     TransformerDecoderBase,
     TransformerEncoderBase,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TransformerModelBase(FairseqEncoderDecoderModel):
@@ -98,8 +101,10 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
         decoder = cls.build_decoder(cfg, tgt_dict, decoder_embed_tokens)
         if not cfg.share_all_embeddings:
             # fsdp_wrap is a no-op when --ddp-backend != fully_sharded
-            encoder = fsdp_wrap(encoder, min_num_params=cfg.min_params_to_wrap)
-            decoder = fsdp_wrap(decoder, min_num_params=cfg.min_params_to_wrap)
+            min_params_to_wrap = cfg.min_params_to_wrap
+            # fsdp_wrap is a no-op when --ddp-backend != fully_sharded
+            encoder = fsdp_wrap(encoder, min_num_params=min_params_to_wrap)
+            decoder = fsdp_wrap(decoder, min_num_params=min_params_to_wrap)
         return cls(cfg, encoder, decoder)
 
     @classmethod
@@ -107,7 +112,16 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
         num_embeddings = len(dictionary)
         padding_idx = dictionary.pad()
 
-        emb = Embedding(num_embeddings, embed_dim, padding_idx)
+        if cfg.use_stable_embedding:
+            import bitsandbytes as bnb
+
+            if not cfg.no_scale_embedding:
+                logger.warning(
+                    "It is recommended to pass --no-scale-embedding with --use-stable-embedding"
+                )
+            emb = bnb.nn.StableEmbedding(num_embeddings, embed_dim, padding_idx)
+        else:
+            emb = Embedding(num_embeddings, embed_dim, padding_idx)
         # if provided, load from preloaded dictionaries
         if path:
             embed_dict = utils.parse_embedding(path)

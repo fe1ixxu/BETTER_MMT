@@ -33,6 +33,9 @@ class FairseqDataclass:
     def name():
         return None
 
+    def positional_args(self):
+        return ["data"]
+
     def _get_all_attributes(self) -> List[str]:
         return [k for k in self.__dataclass_fields__.keys()]
 
@@ -237,6 +240,9 @@ class CommonConfig(FairseqDataclass):
         metadata={
             "help": "path to run plasma_store, defaults to /tmp/plasma. Paths outside /tmp tend to fail."
         },
+    )
+    log_nvidia_smi: bool = field(
+        default=False, metadata={"help": "log output from nvidia-smi during training"}
     )
 
 
@@ -452,6 +458,12 @@ class DistributedTrainingConfig(FairseqDataclass):
 class DatasetConfig(FairseqDataclass):
     num_workers: int = field(
         default=1, metadata={"help": "how many subprocesses to use for data loading"}
+    )
+    num_workers_valid: int = field(
+        default=0,
+        metadata={
+            "help": "how many subprocesses to use for data loading during validation"
+        },
     )
     skip_invalid_size_inputs_valid_test: bool = field(
         default=False,
@@ -711,9 +723,25 @@ class CheckpointConfig(FairseqDataclass):
     no_last_checkpoints: bool = field(
         default=False, metadata={"help": "don't store last checkpoints"}
     )
+    no_best_checkpoints: bool = field(
+        default=False, metadata={"help": "don't store best checkpoints"}
+    )
     no_save_optimizer_state: bool = field(
         default=False,
         metadata={"help": "don't save optimizer-state as part of checkpoint"},
+    )
+    no_save_optimizer_state_on_training_finished: bool = field(
+        default=False,
+        metadata={
+            "help": "don't save optimizer-state as part of checkpoint when training is done"
+        },
+    )
+    symlink_best_and_last_checkpoints: bool = field(
+        default=False,
+        metadata={
+            "help": "Symlink best and last checkpoints instead of copying",
+            "argparse_alias": "--symlink",
+        },
     )
     best_checkpoint_metric: str = field(
         default="loss", metadata={"help": 'metric to use for saving "best" checkpoints'}
@@ -761,6 +789,16 @@ class CheckpointConfig(FairseqDataclass):
                 "thread. NOTE: This feature is currently being tested."
             ),
             "argparse_alias": "--save-async",
+        },
+    )
+    s3_upload_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Upload checkpoints asynchronously in a separate "
+                "thread to S3. NOTE: This feature is currently being tested."
+            ),
+            "argparse_alias": "--s3-dir",
         },
     )
     model_parallel_size: int = II("common.model_parallel_size")
@@ -1014,6 +1052,13 @@ class CommonEvalConfig(FairseqDataclass):
     results_path: Optional[str] = field(
         default=None, metadata={"help": "path to save eval results (optional)"}
     )
+    # GShard or Switch model
+    is_moe: bool = field(
+        default=False,
+        metadata={
+            "help": "if set, use distributed init for MoE generation or evaluation"
+        },
+    )
 
 
 @dataclass
@@ -1041,6 +1086,11 @@ class EvalLMConfig(FairseqDataclass):
         metadata={
             "help": "if BxT is more than this, will batch the softmax over vocab to this amount of tokens, in order to fit into GPU memory"
         },
+    )
+    stats_path: Optional[str] = field(default=None, metadata={"argparse_alias": "--sp"})
+    max_valid_steps: Optional[int] = field(
+        default=None,
+        metadata={"help": "How many batches to evaluate", "argparse_alias": "--nval"},
     )
 
 

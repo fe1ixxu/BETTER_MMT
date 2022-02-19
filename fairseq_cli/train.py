@@ -23,6 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("fairseq_cli.train")
 
+import functools
+
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -70,6 +72,9 @@ def main(cfg: FairseqConfig) -> None:
     if distributed_utils.is_master(cfg.distributed_training):
         checkpoint_utils.verify_checkpoint_directory(cfg.checkpoint.save_dir)
 
+    # Print nvidia smi stats
+    logger.info(metrics.get_nvidia_smi_gpu_memory_stats_str())
+
     # Print args
     logger.info(cfg)
 
@@ -87,14 +92,31 @@ def main(cfg: FairseqConfig) -> None:
     task = tasks.setup_task(cfg.task)
 
     assert cfg.criterion, "Please specify criterion to train a model"
+    if (
+        getattr(cfg.model, "moe_freq", 0) > 0
+        and getattr(cfg.model, "moe_expert_count", 0)
+        < distributed_utils.get_global_world_size()
+    ):
+        assert (
+            cfg.distributed_training.ddp_backend == "fully_sharded"
+        ), "num_experts < num_gpus only supported by FSDP"
 
     # Build model and criterion
     if cfg.distributed_training.ddp_backend == "fully_sharded":
-        with fsdp_enable_wrap(cfg.distributed_training):
+        # if cfg.distributed_training.use_sharded_state: assert cfg.checkpoint.no_save_optimizer_state, f'--use-sharded-state requires --no-save-optimizer-state'
+        extra = {
+            "is_moe": getattr(cfg.model, "moe_freq", 0) > 0,
+        }
+
+        with fsdp_enable_wrap(cfg.distributed_training, **extra):
             model = fsdp_wrap(task.build_model(cfg.model))
     else:
         model = task.build_model(cfg.model)
     criterion = task.build_criterion(cfg.criterion)
+
+    def is_expert_param(p):
+        return getattr(p, "expert", False) or getattr(p, "base_expert", False)
+
     logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))
     logger.info("model: {}".format(model.__class__.__name__))
@@ -107,7 +129,7 @@ def main(cfg: FairseqConfig) -> None:
             sum(
                 p.numel()
                 for p in model.parameters()
-                if not getattr(p, "expert", False) and p.requires_grad
+                if not is_expert_param(p) and p.requires_grad
             ),
         )
     )
@@ -118,10 +140,11 @@ def main(cfg: FairseqConfig) -> None:
             sum(
                 p.numel()
                 for p in model.parameters()
-                if getattr(p, "expert", False) and p.requires_grad
+                if is_expert_param(p) and p.requires_grad
             ),
         )
     )
+    logger.info(metrics.get_nvidia_smi_gpu_memory_stats_str())
 
     # Load valid dataset (we load training data below, based on the latest checkpoint)
     # We load the valid dataset AFTER building the model
@@ -158,6 +181,7 @@ def main(cfg: FairseqConfig) -> None:
             cfg.dataset.batch_size,
         )
     )
+    logger.info(metrics.get_nvidia_smi_gpu_memory_stats_str())
 
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
@@ -293,8 +317,13 @@ def train(
     progress.update_config(_flatten_config(cfg))
 
     trainer.begin_epoch(epoch_itr.epoch)
-
-    valid_subsets = cfg.dataset.valid_subset.split(",")
+    if cfg.task._name in [
+        "multilingual_language_modeling",
+        "translation_multi_simple_epoch",
+    ]:
+        valid_subsets = task.args.valid_subset.split(",")
+    else:
+        valid_subsets = cfg.dataset.valid_subset.split(",")
     should_stop = False
     num_updates = trainer.get_num_updates()
     logger.info("Start iterating over samples")
@@ -414,10 +443,32 @@ def validate_and_save(
     # Save checkpoint
     if do_save or should_stop:
         checkpoint_utils.save_checkpoint(
-            cfg.checkpoint, trainer, epoch_itr, valid_losses[0]
+            cfg.checkpoint,
+            trainer,
+            epoch_itr,
+            valid_losses[0],
+            training_finished=should_stop,
+            async_callback_fn=functools.partial(post_checkpoint_callback, cfg)
+            if cfg.checkpoint.s3_upload_path
+            else None,
         )
 
+    trainer.reset_dummy_batch(epoch_itr.first_batch)
     return valid_losses, should_stop
+
+
+def post_checkpoint_callback(cfg, filename):
+    if cfg.checkpoint.s3_upload_path is not None:
+        try:
+            # PathManager only supports writing to S3, but this function call
+            # can be replaced with other APIs for copying checkpoints.
+            PathManager.copy_from_local(
+                filename,
+                os.path.join(cfg.checkpoint.s3_upload_path, os.path.basename(filename)),
+                overwrite=True,
+            )
+        except (FileNotFoundError, AssertionError) as e:
+            logger.info(f"could not upload {filename}: {e}")
 
 
 def get_training_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
@@ -441,7 +492,11 @@ def validate(
     trainer.begin_valid_epoch(epoch_itr.epoch)
     valid_losses = []
     for subset in subsets:
-        logger.info('begin validation on "{}" subset'.format(subset))
+        logger.info(
+            'begin validation on "{}" subset on rank {}'.format(
+                subset, distributed_utils.get_global_rank()
+            )
+        )
 
         # Initialize data iterator
         itr = trainer.get_valid_iterator(subset).next_epoch_itr(
@@ -449,6 +504,13 @@ def validate(
         )
         if cfg.common.tpu:
             itr = utils.tpu_data_loader(itr)
+
+        logger.info(
+            'got valid iterator on "{}" subset on rank {}'.format(
+                subset, distributed_utils.get_global_rank()
+            )
+        )
+
         progress = progress_bar.progress_bar(
             itr,
             log_format=cfg.common.log_format,
@@ -469,6 +531,12 @@ def validate(
             wandb_run_name=os.environ.get(
                 "WANDB_NAME", os.path.basename(cfg.checkpoint.save_dir)
             ),
+        )
+
+        logger.info(
+            'Begin looping over validation "{}" subset with length "{}"'.format(
+                subset, len(progress)
+            )
         )
 
         # create a new root metrics aggregator so validation metrics

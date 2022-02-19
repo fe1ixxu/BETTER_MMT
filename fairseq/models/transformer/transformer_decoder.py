@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import functools
 import math
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,7 @@ from torch import Tensor
 
 from fairseq import utils
 from fairseq.distributed import fsdp_wrap
+from fairseq.distributed import utils as dist_utils
 from fairseq.models import FairseqIncrementalDecoder
 from fairseq.models.transformer import TransformerConfig
 from fairseq.modules import (
@@ -34,6 +36,36 @@ def module_name_fordropout(module_name: str) -> str:
         return "TransformerDecoder"
     else:
         return module_name
+
+
+def div_by_world_size(world_size, tensor):
+    return tensor / world_size
+
+
+def fsdp_wrap_expert(cfg, layer, min_num_params=0):
+    # Wrap MoE layer with FSDP using a process group with all replicated ranks
+    process_group = layer.moe_layer.expert_group
+    world_size = dist_utils.get_data_parallel_group().size()
+    pg_size = process_group.size()
+    num_experts = world_size / pg_size
+
+    for i, expert in enumerate(layer.moe_layer.experts):
+        layer.moe_layer.experts[i] = fsdp_wrap(
+            expert, process_group=process_group, min_num_params=0
+        )
+    if cfg.moe_normalize_expert_grad == "sqrt_world_size":
+        expert_normalization_term = math.sqrt(num_experts)
+    else:
+        expert_normalization_term = num_experts
+    for p in layer.moe_layer.experts.parameters():
+        p.expert = True
+        # Scale grads by world_size/pg_size so that grads match the equivalent replicated
+        # world size expected within Trainer
+        p.register_hook(functools.partial(div_by_world_size, expert_normalization_term))
+
+    # Everything else gets wrapped as normal.
+    layer = fsdp_wrap(layer, min_num_params=min_num_params)
+    return layer
 
 
 class TransformerDecoderBase(FairseqIncrementalDecoder):
@@ -115,12 +147,16 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
             self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend(
-            [
-                self.build_decoder_layer(cfg, no_encoder_attn)
-                for _ in range(cfg.decoder.layers)
-            ]
-        )
+        moe_freq = max(cfg.decoder_moe_freq, cfg.moe_freq)
+        for i in range(cfg.decoder.layers):
+            is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
+            self.layers.append(
+                self.build_decoder_layer(
+                    cfg,
+                    no_encoder_attn=no_encoder_attn,
+                    is_moe_layer=is_moe_layer,
+                )
+            )
         self.num_layers = len(self.layers)
 
         if cfg.decoder.normalize_before and not cfg.no_decoder_final_norm:
@@ -171,8 +207,10 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 BaseLayer(cfg),
             )
 
-    def build_decoder_layer(self, cfg, no_encoder_attn=False):
-        layer = transformer_layer.TransformerDecoderLayerBase(cfg, no_encoder_attn)
+    def build_decoder_layer(self, cfg, no_encoder_attn=False, is_moe_layer=False):
+        layer = transformer_layer.TransformerDecoderLayerBase(
+            cfg, no_encoder_attn, is_moe_layer=is_moe_layer
+        )
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -180,7 +218,10 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         # if we are checkpointing, enforce that FSDP always wraps the
         # checkpointed layer, regardless of layer size
         min_params_to_wrap = cfg.min_params_to_wrap if not checkpoint else 0
-        layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
+        if not is_moe_layer or cfg.ddp_backend != "fully_sharded":
+            layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
+        else:
+            layer = fsdp_wrap_expert(cfg, layer, min_num_params=min_params_to_wrap)
         return layer
 
     def forward(
@@ -332,13 +373,17 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         # decoder layers
         attn: Optional[Tensor] = None
         inner_states: List[Optional[Tensor]] = [x]
+        if encoder_out is None:
+            l_aux = []
+        else:
+            l_aux = encoder_out["l_aux"] if "l_aux" in encoder_out else []
         for idx, layer in enumerate(self.layers):
             if incremental_state is None and not full_context_alignment:
                 self_attn_mask = self.buffered_future_mask(x)
             else:
                 self_attn_mask = None
 
-            x, layer_attn, _ = layer(
+            x, layer_attn, _, l_aux_i = layer(
                 x,
                 enc,
                 padding_mask,
@@ -348,6 +393,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
+            l_aux.append(l_aux_i)
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
                 attn = layer_attn.float().to(x)
@@ -368,7 +414,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {"attn": [attn], "inner_states": inner_states}
+        return x, {"attn": [attn], "inner_states": inner_states, "l_aux": l_aux}
 
     def output_layer(self, features):
         """Project features to the vocabulary size."""
@@ -477,7 +523,9 @@ class TransformerDecoder(TransformerDecoderBase):
             TransformerConfig.from_namespace(args), dictionary, embed_tokens
         )
 
-    def build_decoder_layer(self, args, no_encoder_attn=False):
+    def build_decoder_layer(self, args, no_encoder_attn=False, is_moe_layer=False):
         return super().build_decoder_layer(
-            TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn
+            TransformerConfig.from_namespace(args),
+            no_encoder_attn=no_encoder_attn,
+            is_moe_layer=is_moe_layer,
         )
