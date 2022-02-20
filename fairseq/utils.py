@@ -60,6 +60,20 @@ class FileContentsAction(argparse.Action):
         setattr(namespace, self.dest, argument)
 
 
+class CSVFileContentsAction(FileContentsAction):
+    def __init__(self, option_strings, dest, nargs=None, **kwargs):
+        if nargs is not None:
+            raise ValueError("nargs not allowed")
+        super(CSVFileContentsAction, self).__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        super(CSVFileContentsAction, self).__call__(
+            parser, namespace, values, option_string
+        )
+        argument = getattr(namespace, self.dest).split(",")
+        setattr(namespace, self.dest, argument)
+
+
 def split_paths(paths: str, separator=os.pathsep) -> List[str]:
     return (
         paths.split(separator) if "://" not in paths else paths.split(MANIFOLD_PATH_SEP)

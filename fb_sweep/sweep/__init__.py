@@ -2,7 +2,9 @@ import argparse
 import datetime
 import os
 import socket
-from typing import List, Optional
+import subprocess
+from typing import Callable, List, MutableMapping, Optional
+from urllib.parse import urlparse
 
 
 def csv_str_list(x):
@@ -41,6 +43,24 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         default=1,
         help="number of nodes for distributed training",
     )
+    parser.add_argument(
+        "--local-experts",
+        type=int,
+        default=1,
+        help="number of local experts",
+    )
+    parser.add_argument(
+        "--langs",
+        type=str,
+        default="en_XX",
+        help="list of languages used in the language model, separate by commas",
+    )
+    parser.add_argument(
+        "--update-freq",
+        type=int,
+        default=1,
+        help="update freq",
+    )
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
         "--baseline-model", help="path to baseline model from which to resume training"
@@ -70,24 +90,134 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         "--python", default="python", help="path to nonstandard python binary"
     )
 
-    try:
-        import torch_xla  # noqa
-
-        tpu = True
-    except ImportError:
-        tpu = False
-
+    # identify cluster
     hostname = socket.gethostname()
-    if "fair" in hostname:
+    is_azure = is_aws = is_fair = is_tpu = is_rsc = False
+    if os.path.exists("/shared/home"):
+        cluster = "azure"
+        is_azure = True
+    elif "p3dn" in hostname or "p4d" in hostname or os.path.exists("/fsx"):
+        cluster = "aws"
+        is_aws = True
+    elif "fair" in hostname:
+        cluster = "fair"
+        is_fair = True
+    elif "rsc" in hostname:
+        cluster = "rsc"
+        is_rsc = True
+    else:
+        try:
+            import torch_xla  # noqa
+
+            cluster = "tpu"
+            is_tpu = True
+        except ImportError:
+            raise NotImplementedError(hostname)
+
+    # configure --checkpoints-dir, CPU settings, etc.
+    # we also configure cpu-bind options to improve all-to-all performance, especially on A100
+    if is_fair or is_aws or is_azure or is_rsc:
         default_backend = "slurm"
+        default_partition = None
+        default_local_checkpoints_dir = None
+        if is_azure:
+            prefix = "/shared/home"
+            cpus_per_task = 12  # assumes 8 tasks per node
+            default_tensorboard_logdir = None  # will default to save_dir/tb
+            default_cpu_bind = "mask_cpu:ffffff000000,ffffff000000,ffffff,ffffff,ffffff000000000000000000,ffffff000000000000000000,ffffff000000000000,ffffff000000000000"
+            azure_upload_path = os.environ.get("AZURE_BLOB_SAS_URL", "")
+            if azure_upload_path != "":
+                # write checkpoints to local scratch storage on each node
+                default_local_checkpoints_dir = os.path.join(
+                    "/mnt/scratch",
+                    os.environ["USER"],
+                    "checkpoints",
+                    str(datetime.date.today()),
+                )
+                # then copy them to Azure blob storage
+                o = urlparse(azure_upload_path)
+                o = o._replace(
+                    path=os.path.join(
+                        o.path, os.environ["USER"], str(datetime.date.today())
+                    )
+                )
+                azure_upload_path = o.geturl()
+                parser.add_argument(
+                    "--azure-upload-path",
+                    default=azure_upload_path,
+                    help="Azure blob storage SAS URL",
+                )
+                # if needed, create a container for this user on the Azure blob account
+                cmd = [
+                    "/shared/home/myleott/bin/azcopy",
+                    "make",
+                    o._replace(path=os.path.dirname(o.path)).geturl(),
+                ]
+                res = subprocess.run(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+        elif is_aws:
+            prefix = "/fsx"
+            cpus_per_task = 12  # assumes 8 tasks per node
+            default_tensorboard_logdir = os.path.join(
+                prefix,
+                os.environ["USER"],
+                "tensorboard_logs",
+                str(datetime.date.today()),
+            )
+            default_cpu_bind = "mask_cpu:000000ffffff000000ffffff,000000ffffff000000ffffff,000000ffffff000000ffffff,000000ffffff000000ffffff,ffffff000000ffffff000000,ffffff000000ffffff000000,ffffff000000ffffff000000,ffffff000000ffffff000000"
+        elif is_fair:
+            default_partition = "learnfair"
+            prefix = "/checkpoint"
+            cpus_per_task = 10  # assumes 8 tasks per node
+            default_cpu_bind = "map_ldom:0,0,0,0,1,1,1,1"
+            default_tensorboard_logdir = os.path.join(
+                prefix,
+                os.environ["USER"],
+                "tensorboard_logs",
+                str(datetime.date.today()),
+            )
+        elif is_rsc:
+            default_partition = "debug"
+            prefix = "/checkpoint/xlmg"
+            cpus_per_task = 32  # assumes 8 tasks per node
+            default_cpu_bind = "none"
+            # default_cpu_bind = "mask_cpu:ffff0000000000000000000000000000ffff000000000000,ffff0000000000000000000000000000ffff000000000000,ffff0000000000000000000000000000ffff0000,ffff0000000000000000000000000000ffff0000,ffff0000000000000000000000000000ffff0000000000000000000000000000,ffff0000000000000000000000000000ffff0000000000000000000000000000,ffff0000000000000000000000000000ffff00000000000000000000,ffff0000000000000000000000000000ffff00000000000000000000"
+            default_tensorboard_logdir = os.path.join(
+                prefix,
+                os.environ["USER"],
+                "tensorboard_logs",
+                str(datetime.date.today()),
+            )
+        else:
+            raise Exception
         parser.add_argument(
             "--checkpoints-dir",
-            default=os.path.join(
-                "/checkpoint", os.environ["USER"], str(datetime.date.today())
+            default=(
+                os.path.join(prefix, os.environ["USER"], str(datetime.date.today()))
+                if is_fair or is_rsc
+                else os.path.join(
+                    prefix,
+                    os.environ["USER"],
+                    "checkpoints",
+                    str(datetime.date.today()),
+                )
             ),
             help="save checkpoints and logs in <checkpoints-dir>/<prefix>.<save_dir_key>",
         )
-    elif tpu:
+        parser.add_argument("--cpus-per-task", type=str, default=str(cpus_per_task))
+        parser.add_argument("--cpu-bind", default=default_cpu_bind)
+        parser.add_argument(
+            "--local-checkpoints-dir",
+            default=default_local_checkpoints_dir,
+            help="node-local directory for saving checkpoints",
+        )
+        parser.add_argument(
+            "--tensorboard-logdir",
+            default=default_tensorboard_logdir,
+            help="save tensorboard logs in <tensorboard-logdir>/<prefix>.<save_dir_key>",
+        )
+    elif is_tpu:
         default_backend = "tpu"
         parser.add_argument(
             "--checkpoints-dir",
@@ -123,6 +253,7 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         choices=["fblearner", "chronos", "slurm", "tpu"],
         default=default_backend,
     )
+    parser.add_argument("--cluster", default=cluster)
 
     # FBLearner params
     parser.add_argument("--entitlement", help="entitlement to use", default="gpu_fair")
@@ -198,6 +329,8 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         "--time", default="4320", help="expected job duration in minutes"
     )
     parser.add_argument("--mem", "--mem", help="memory to request")
+    parser.add_argument("--container-image")
+    parser.add_argument("--container-save")
     parser.add_argument(
         "--constraint",
         metavar="CONSTRAINT",
@@ -321,11 +454,64 @@ class hyperparam(object):
 
 
 def main(
-    get_grid,
-    postprocess_hyperparams,
-    add_extra_options_func=None,
+    get_grid: Callable[[argparse.Namespace], List[hyperparam]],
+    postprocess_hyperparams: Callable[
+        [argparse.Namespace, MutableMapping[str, hyperparam]], None
+    ],
+    add_extra_options_func: Optional[Callable[[argparse.ArgumentParser], None]] = None,
     scheduler_args: Optional[List[str]] = None,
-):
+) -> None:
+    """Do a grid search.
+    Example:
+    >>> # a 1-dimensional grid with 2 possible configurations
+    >>> def get_1d_grid(args):
+    ...   return [hyperparam("--some-arg", values=[1, 10])]
+    ...
+    >>> # a 2-dimensional grid with 3*3=9 possible configurations
+    >>> def get_2d_grid(args):
+    ...   return [
+    ...     hyperparam("--foo", values=[1, 10, 100]),
+    ...     hyperparam("--bar", values=[2, 4, 8]),
+    ...   ]
+    ...
+    >>> def double_hyperparams(args, config):
+    ...   for k in config:
+    ...     config[k].current_value *= 2
+    ...
+    >>> def add_extra_options_func(parser):
+    ...   parser.add_argument("--some-extra-argument", help="My extra argument")
+    ...
+    >>> # sweep over 1d grid with 2 possible values; read arguments from sys.argv
+    >>> main(
+    ...   get_1d_grid, double_hyperparams, add_extra_options_func
+    ... )
+    >>> # sweep over 2d grid with 9 possible values; read arguments from elsewhere
+    >>> main(
+    ...   get_2d_grid,
+    ...   double_hyperparams,
+    ...   add_extra_options_func,
+    ...   ["--some-extra-argument"],
+    ... )
+
+    Parameters:
+        get_grid: A unary callable which returns the grid to search over.
+            The callable is passed the parsed sweep arguments including the extra
+            arguments defined by `add_extra_options_func`. See also `get_args`.
+            The returned list represents the dimensions of the grid. That is, a list of
+            length n represents a grid of dimension n. Let v_i denote the number of
+            possible values for dimension i. Then the total number of configurations
+            is given by v_1 * ... * v_n.
+        postprocess_hyperparams: A 2-ary callable to post-process hyperparameter
+            configurations before running the job. The first argument is the parsed
+            sweep arguments including the extra arguments defined by
+            `add_extra_options_func`. The second argument is a realized hyperparameter
+            configuration as a mutable mapping of hyperparameter name to `hyperparam`
+            instance with a `current_value` set.
+        add_extra_options_func: A unary callable which adds extra arguments to the
+            sweep CLI. It is passed the parser used to define the sweep script's CLI.
+        scheduler_args: A list of unprocessed arguments to parse. If None, then
+            `sys.argv[1:]`.
+    """
     args = get_args(add_extra_options_func, scheduler_args)
     if args.backend == "fblearner":
         from .fblearner import main as backend_main

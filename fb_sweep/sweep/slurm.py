@@ -38,7 +38,10 @@ def main(get_grid, postprocess_hyperparams, args):
 
 
 def copy_all_python_files(
-    source, snapshot_main_dir, code_snapshot_hash, recurse_dirs="fairseq"
+    source,
+    snapshot_main_dir,
+    code_snapshot_hash,
+    recurse_dirs="fairseq,fairseq_cli,scripts",
 ):
     """
     Copies following files from source to destination:
@@ -140,6 +143,9 @@ def is_job_valid(args, save_dir, dry_run):
     return True
 
 
+DEFAULT_NCCL_DEBUG = os.getenv("NCCL_DEBUG", "INFO")
+
+
 def set_env(args, env, dry_run):
     if "OMP_NUM_THREADS" not in env:
         env["OMP_NUM_THREADS"] = "2"
@@ -147,18 +153,18 @@ def set_env(args, env, dry_run):
         if not dry_run("start training locally"):
             if "CUDA_VISIBLE_DEVICES" not in env:
                 env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(args.num_gpus)))
-            env["NCCL_DEBUG"] = "INFO"
+            env["NCCL_DEBUG"] = DEFAULT_NCCL_DEBUG
     else:
         if args.num_nodes > 1:
             env["NCCL_SOCKET_IFNAME"] = "^docker0,lo"
-            env["NCCL_DEBUG"] = "INFO"
+            env["NCCL_DEBUG"] = DEFAULT_NCCL_DEBUG
 
 
 def gen_train_command(args, env, config, destination, save_dir, save_dir_key):
     # generate train command
     train_cmd = [args.python, os.path.join(destination, args.script)]
     train_cmd.extend(["--distributed-world-size", str(args.num_nodes * args.num_gpus)])
-    if args.num_nodes > 1:
+    if args.num_nodes > 1 or (args.num_gpus > 1 and not args.local):
         train_cmd.extend(
             [
                 "--distributed-port",
@@ -167,20 +173,35 @@ def gen_train_command(args, env, config, destination, save_dir, save_dir_key):
         )
     if args.data is not None:
         train_cmd.extend([args.data])
-    train_cmd.extend(["--save-dir", save_dir])
-    if not args.no_tensorboard:
-        _dir = args.tensorboard_logdir
-        if _dir is None:
-            _dir = os.path.join(
-                "/checkpoint",
-                env["USER"],
-                "tensorboard_logs",
-                str(datetime.date.today()),
-            )
-        tensorboard_logdir = os.path.join(
-            _dir,
-            f"{args.prefix}.{save_dir_key}.ngpu{str(args.num_nodes * args.num_gpus)}",
+    if args.local_checkpoints_dir is None:
+        train_cmd.extend(["--save-dir", save_dir])
+        local_save_dir = save_dir
+    else:
+        num_total_gpus = args.num_nodes * args.num_gpus
+        local_save_dir = os.path.join(
+            args.local_checkpoints_dir,
+            f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}",
         )
+        train_cmd.extend(["--save-dir", local_save_dir])
+    if getattr(args, "azure_upload_path", None) is not None:
+        from urllib.parse import urlparse
+
+        o = urlparse(args.azure_upload_path)
+        o = o._replace(
+            path=os.path.join(
+                o.path, f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}"
+            )
+            + "/"
+        )
+        train_cmd.extend(["--save-async", "--s3-upload-path", o.geturl()])
+    if not args.no_tensorboard:
+        if args.tensorboard_logdir is None:
+            tensorboard_logdir = os.path.join(save_dir, "tb")
+        else:
+            tensorboard_logdir = os.path.join(
+                args.tensorboard_logdir,
+                f"{args.prefix}.{save_dir_key}.ngpu{str(args.num_nodes * args.num_gpus)}",
+            )
         train_cmd.extend(["--tensorboard-logdir", tensorboard_logdir])
     if not args.no_wandb:
         if "WANDB_API_KEY" in env and "WANDB_BASE_URL" in env:
@@ -190,9 +211,9 @@ def gen_train_command(args, env, config, destination, save_dir, save_dir_key):
             if "WANDB_RUN_GROUP" not in env:
                 env["WANDB_RUN_GROUP"] = args.prefix
             if "WANDB_RUN_ID" not in env:
-                env["WANDB_RUN_ID"] = hashlib.md5(
-                    os.path.basename(save_dir).encode("utf-8")
-                ).hexdigest()
+                env["WANDB_RUN_ID"] = hashlib.md5(save_dir.encode("utf-8")).hexdigest()
+            if "WANDB_RESUME" not in env:
+                env["WANDB_RESUME"] = "allow"
     for hp in config.values():
         train_cmd.extend(map(str, hp.get_cli_args()))
     return train_cmd
@@ -230,17 +251,34 @@ def gen_srun_command_and_str(
         "append",
         "--unbuffered",
     ]
+    if args.cpu_bind:
+        base_srun_cmd += [f"--cpu-bind={args.cpu_bind}"]
     if args.salloc:
         excluded_hosts = os.environ.get("EXCLUDED_HOSTS", None)
         included_hosts = os.environ.get("INCLUDED_HOSTS", None)
         base_srun_cmd += [
             "--nodes",
             str(args.num_nodes),
+            "--ntasks-per-node",
+            str(args.num_gpus),
             "--ntasks",
-            str(args.num_nodes),
+            str(args.num_gpus * args.num_nodes),
         ]
         base_srun_cmd += ["-x", excluded_hosts] if excluded_hosts is not None else []
         base_srun_cmd += ["-w", included_hosts] if included_hosts is not None else []
+    if args.container_image is not None:
+        # e.g., --container-image=nvcr.io/nvidia/pytorch:21.03-py3
+        base_srun_cmd += ["--container-image", args.container_image]
+        # hardcoded for Azure
+        base_srun_cmd += [
+            "--container-mounts",
+            f"/nfs2:/nfs2,/mnt:/mnt,/sys:/sys,/usr/local/bin:/usr/local/bin,{os.getcwd()}:/workspace",
+        ]
+        assert (
+            not args.snapshot_code
+        ), "--snapshot-code is not supported on Azure when using containers"
+        if args.container_save is not None:
+            base_srun_cmd += ["--container-save", args.container_save]
 
     srun_cmd = base_srun_cmd + train_cmd
     srun_cmd_str = " ".join(map(shlex.quote, srun_cmd))
@@ -269,14 +307,14 @@ def gen_sbatch_command_and_str(
         "sbatch",
         "--job-name",
         job_name,
-        "--gpus",
-        str(args.num_gpus * args.num_nodes),
+        "--gpus-per-node",
+        str(args.num_gpus),
         "--nodes",
         str(args.num_nodes),
         "--ntasks-per-node",
-        "1",
+        str(args.num_gpus),
         "--cpus-per-task",
-        str(int(8 * args.num_gpus)),
+        args.cpus_per_task,
         "--output",
         train_log,
         "--error",
@@ -314,11 +352,14 @@ def gen_sbatch_command_and_str(
     if args.mem is not None:
         sbatch_cmd += ["--mem", args.mem]
     else:
-        sbatch_cmd += ["--mem-per-cpu", "7G"]
+        sbatch_cmd += ["--mem", "0"]
     sbatch_cmd += ["-x", excluded_hosts] if excluded_hosts is not None else []
     sbatch_cmd += ["-w", included_hosts] if included_hosts is not None else []
 
-    wrapped_cmd = requeue_support() + "\n" + srun_cmd_str
+    wrapped_cmd = requeue_support()
+    if args.cluster == "azure":
+        wrapped_cmd += "\n" + azure_support()
+    wrapped_cmd += "\n" + srun_cmd_str
     if array_length is None:
         wrapped_cmd = wrapped_cmd + " \n wait $! \n sleep 610 & \n wait $!"
 
@@ -332,7 +373,7 @@ def local_run(args, env, train_cmd, post_cmds, dry_run):
     if not dry_run("start training locally"):
         if "CUDA_VISIBLE_DEVICES" not in env:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(args.num_gpus)))
-        env["NCCL_DEBUG"] = "INFO"
+        env["NCCL_DEBUG"] = DEFAULT_NCCL_DEBUG
         train_proc = subprocess.Popen(train_cmd, env=env)
         train_proc.wait()
         for post_cmd in post_cmds:
@@ -389,8 +430,8 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
         os.environ["PYTHONPATH"] = destination + ":" + os.environ.get("PYTHONPATH", "")
 
     # set environment
-    env = os.environ.copy()
-    set_env(args, env, dry_run)
+    base_env = os.environ.copy()
+    set_env(args, base_env, dry_run)
 
     # start training
     srun_cmd_str_list = []
@@ -414,6 +455,10 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
         # check if job failed, exists, finished
         if not is_job_valid(args, save_dir, dry_run):
             continue
+
+        # clone base env and update for this job, e.g., we set WANDB_RUN_ID
+        # based on the save_dir, which is based on the current hyperparam values
+        env = base_env.copy()
 
         # generate train command
         train_cmd = gen_train_command(
@@ -588,4 +633,22 @@ def requeue_support():
         trap 'trap_handler USR1' USR1
         trap 'trap_handler TERM' TERM
     """
+    )
+
+
+def azure_support():
+    return textwrap.dedent(
+        """
+        export NCCL_TOPO_FILE=/opt/microsoft/ndv4-topo.xml
+        export NCCL_IB_PCI_RELAXED_ORDERING=1
+        export UCX_IB_PCI_RELAXED_ORDERING=on
+        export NCCL_SOCKET_IFNAME=eth0
+        export UCX_NET_DEVICES=eth0
+        export CUDA_DEVICE_ORDER=PCI_BUS_ID
+        export OMPI_MCA_COLL_HCOLL_ENABLE=0
+        if [ -e "/etc/profile.d/modules.sh" ]; then
+            . /etc/profile.d/modules.sh
+            module load mpi/hpcx
+        fi
+        """
     )

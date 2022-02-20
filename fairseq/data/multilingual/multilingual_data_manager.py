@@ -8,8 +8,8 @@ import json
 import logging
 import math
 import os
-from collections import OrderedDict, defaultdict
 from argparse import ArgumentError
+from collections import OrderedDict, defaultdict
 
 from fairseq import utils
 from fairseq.data import (
@@ -35,8 +35,12 @@ from fairseq.data.multilingual.multilingual_utils import (
 )
 from fairseq.data.multilingual.sampled_multi_dataset import CollateFormat
 from fairseq.file_io import PathManager
-from fairseq.utils import FileContentsAction, csv_str_list, eval_str_dict
-
+from fairseq.utils import (
+    CSVFileContentsAction,
+    FileContentsAction,
+    csv_str_list,
+    eval_str_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,20 @@ class MultilingualDatasetManager(object):
         self._has_sharded_data = False
         self._num_shards_dict = {}
         self._training_data_sizes = defaultdict(lambda: {})
+        if self.args.pad_to_fixed_length:
+            self.pad_to_fixed_length = {
+                "source": self.args.max_source_positions,
+                "target": self.args.max_target_positions,
+            }
+        else:
+            self.pad_to_fixed_length = None
+        # If True, use the training dataset size of the current shard only;
+        # don't accumulate training dataset size across shards
+        self.use_local_shard_size = getattr(args, "use_local_shard_size", False)
+        if self.use_local_shard_size:
+            logger.info(
+                "Using local training dataset sizes of the current shard for sampling distribution"
+            )
 
     @classmethod
     def setup_data_manager(cls, args, lang_pairs, langs, dicts, sampling_method):
@@ -100,7 +118,7 @@ class MultilingualDatasetManager(object):
         parser.add_argument(
             "--langs",
             default=None,
-            type=csv_str_list,
+            action=CSVFileContentsAction,
             help="a list of languages comma sperated languages which can appear in lang-pairs; "
             "note that the ordering determines language token IDs",
         )
@@ -277,6 +295,18 @@ class MultilingualDatasetManager(object):
             type=int,
             help="virtual data size of the whole joint dataset to speed"
             "up data loading and have specific dynamic sampling strategy interval",
+        )
+        parser.add_argument(
+            "--pad-to-fixed-length",
+            default=False,
+            action="store_true",
+            help="pad batch to fixed sequence length",
+        )
+        parser.add_argument(
+            "--use-local-shard-size",
+            default=False,
+            action="store_true",
+            help="If True, use the training dataset size of the current shard only for sampling distribution",
         )
 
     @classmethod
@@ -699,6 +729,7 @@ class MultilingualDatasetManager(object):
             align_dataset=align_dataset,
             src_lang_id=src_lang_id,
             tgt_lang_id=tgt_lang_id,
+            fixed_pad_length=self.pad_to_fixed_length,
         )
 
     def src_dataset_tranform_func(self, src_lang, tgt_lang, dataset, spec=None):
@@ -1010,6 +1041,12 @@ class MultilingualDatasetManager(object):
             if shard_ind not in my_data_sizes:
                 my_data_sizes[shard_ind] = len(d)
             known_size = max(my_data_sizes.values())
+            if self.use_local_shard_size:
+                total_data_size = my_data_sizes[shard_ind]
+            else:
+                total_data_size = sum(
+                    my_data_sizes.get(i, known_size) for i in range(num_shard)
+                )
             data_sizes.append(
                 # If we don't know the data size of the shard yet,
                 # use the the max known data size to approximate.
@@ -1018,7 +1055,7 @@ class MultilingualDatasetManager(object):
                 # the max shard size approximation is almost correct before loading
                 # the last shard; after loading the last shard, it will have the
                 # exact data sizes of the whole data size.
-                (key, sum(my_data_sizes.get(i, known_size) for i in range(num_shard)))
+                (key, total_data_size)
             )
         logger.info(
             f"estimated total data sizes of all shards used in sampling ratios: {data_sizes}. "
@@ -1098,12 +1135,13 @@ class MultilingualDatasetManager(object):
     def load_sampled_multi_epoch_dataset(
         self, split, training, epoch=0, combine=False, shard_epoch=None, **kwargs
     ):
+        output_datasets = {}
         datasets, data_param_list = self.load_split_datasets(
             split, training, epoch, combine, shard_epoch=shard_epoch, **kwargs
         )
         if training and split == getattr(self.args, "train_subset", None):
             sample_ratios = self.get_sampling_ratios(data_param_list, datasets, epoch)
-            return SampledMultiEpochDataset(
+            output_datasets[split] = SampledMultiEpochDataset(
                 OrderedDict(datasets),
                 epoch=epoch,
                 shard_epoch=shard_epoch,
@@ -1118,17 +1156,30 @@ class MultilingualDatasetManager(object):
                 shared_collater=self._shared_collater(),
             )
         else:
-            return self.load_into_concat_dataset(split, datasets, data_param_list)
+            splits = [split]
+            for dataset_name, dataset in datasets:
+                split_name = split + "_" + dataset_name
+                output_datasets[split_name] = dataset
+                splits.append(split_name)
+            if split in self.args.valid_subset:
+                self.args.valid_subset = self.args.valid_subset.replace(
+                    split, ",".join(splits)
+                )
+            output_datasets[split] = self.load_into_concat_dataset(
+                split, datasets, data_param_list
+            )
+        return output_datasets
 
     def load_sampled_multi_dataset(
         self, split, training, epoch=0, combine=False, shard_epoch=None, **kwargs
     ):
+        output_datasets = {}
         datasets, data_param_list = self.load_split_datasets(
             split, training, epoch, combine, shard_epoch=shard_epoch, **kwargs
         )
         if training and split == getattr(self.args, "train_subset", None):
             sample_ratios = self.get_sampling_ratios(data_param_list, datasets, epoch)
-            return SampledMultiDataset(
+            output_datasets[split] = SampledMultiDataset(
                 OrderedDict(datasets),
                 epoch=epoch,
                 # valid and test datasets will be degerate to concating datasets:
@@ -1141,7 +1192,19 @@ class MultilingualDatasetManager(object):
                 shared_collater=self._shared_collater(),
             )
         else:
-            return self.load_into_concat_dataset(split, datasets, data_param_list)
+            splits = [split]
+            for dataset_name, dataset in datasets:
+                split_name = split + "_" + dataset_name
+                output_datasets[split_name] = dataset
+                splits.append(split_name)
+            if split in self.args.valid_subset:
+                self.args.valid_subset = self.args.valid_subset.replace(
+                    split, ",".join(splits)
+                )
+            output_datasets[split] = self.load_into_concat_dataset(
+                split, datasets, data_param_list
+            )
+        return output_datasets
 
     def load_dataset(
         self, split, training, epoch=0, combine=False, shard_epoch=None, **kwargs

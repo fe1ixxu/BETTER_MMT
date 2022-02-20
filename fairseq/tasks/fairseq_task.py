@@ -524,6 +524,18 @@ class FairseqTask(object):
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
             optimizer.backward(loss)
+
+        def freeze_params(layer):
+            for param in layer.parameters():
+                param.grad = None
+
+        if getattr(self.cfg, "freeze_up_to_layer", None):
+            for module in model.modules():
+                if not isinstance(module, torch.nn.ModuleList):
+                    continue
+                for layer in module[: getattr(self.cfg, "freeze_up_to_layer", None)]:
+                    freeze_params(layer)
+
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, criterion):
