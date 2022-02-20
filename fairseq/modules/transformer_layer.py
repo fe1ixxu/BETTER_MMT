@@ -15,9 +15,17 @@ from fairseq import utils
 from fairseq.models.transformer import TransformerConfig
 from fairseq.modules import LayerNorm, MultiheadAttention, gelu
 from fairseq.modules.fairseq_dropout import FairseqDropout
-from fairseq.modules.fused_bias_gelu import fused_bias_gelu, has_fused_bias_gelu
+from fairseq.modules.fused_bias_gelu import (
+    fused_bias_gelu,
+    has_fused_bias_gelu,
+    has_megatron_fused_kernels,
+    load_megatron_fused_kernel,
+)
+from fairseq.modules.fused_bias_relu_squared import fused_bias_relu_squared
+from fairseq.modules.linear import Linear
 from fairseq.modules.moe import MOELayer, Top1Gate, Top2Gate
 from fairseq.modules.quant_noise import quant_noise
+from fairseq.utils import relu_squared
 
 
 def _linear(x, weight, bias=None):
@@ -31,22 +39,27 @@ def _ffn(
     activation_dropout_module,
     fc2,
     dropout_module,
+    ffn_ln=None,
 ):
     x_shape = x.shape
     x = x.reshape(-1, x.size(-1))
     if has_fused_bias_gelu and activation_fn == gelu:
         x = _linear(x, fc1.weight)
         x = fused_bias_gelu(x, fc1.bias)
-        x = activation_dropout_module(x)
-        x = _linear(x, fc2.weight, fc2.bias)
+    elif activation_fn == relu_squared:
+        x = _linear(x, fc1.weight)
+        x = fused_bias_relu_squared(x, fc1.bias)
     else:
         x = _linear(x, fc1.weight, fc1.bias)
         x = activation_fn(x)
-        x = activation_dropout_module(x)
-        x = _linear(x, fc2.weight, fc2.bias)
+    x = activation_dropout_module(x)
+    if ffn_ln is not None:
+        x = ffn_ln(x)
+    x = _linear(x, fc2.weight, fc2.bias)
     x = x.view(x_shape)
+    fc_result = x
     x = dropout_module(x)
-    return x
+    return x, fc_result
 
 
 class FeedForwardNetwork(nn.Module):
@@ -54,7 +67,9 @@ class FeedForwardNetwork(nn.Module):
     Feed Forward Network layer in the Transformer model
     """
 
-    def __init__(self, cfg, embed_dim, ffn_dim, dropout_module=None):
+    def __init__(
+        self, cfg, embed_dim, ffn_dim, dropout_module=None, init_model_on_gpu=False
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.quant_noise = cfg.quant_noise.pq
@@ -71,17 +86,19 @@ class FeedForwardNetwork(nn.Module):
         self.activation_dropout_module = FairseqDropout(
             float(activation_dropout_p), module_name=self.__class__.__name__
         )
-        self.fc1 = self.build_fc1(
+        self.fc1 = self.build_fc(
             self.embed_dim,
             ffn_dim,
             self.quant_noise,
             self.quant_noise_block_size,
+            init_model_on_gpu=init_model_on_gpu,
         )
-        self.fc2 = self.build_fc2(
+        self.fc2 = self.build_fc(
             ffn_dim,
             self.embed_dim,
             self.quant_noise,
             self.quant_noise_block_size,
+            init_model_on_gpu=init_model_on_gpu,
         )
         self.dropout_module = (
             FairseqDropout(cfg.dropout, module_name=self.__class__.__name__)
@@ -89,14 +106,13 @@ class FeedForwardNetwork(nn.Module):
             else dropout_module
         )
 
-    def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
+    def build_fc(
+        self, input_dim, output_dim, q_noise, qn_block_size, init_model_on_gpu
+    ):
         return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
-        )
-
-    def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
-        return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
+            Linear(input_dim, output_dim, init_model_on_gpu=init_model_on_gpu),
+            p=q_noise,
+            block_size=qn_block_size,
         )
 
     def forward(self, x):
@@ -107,8 +123,7 @@ class FeedForwardNetwork(nn.Module):
             activation_dropout_module=self.activation_dropout_module,
             fc2=self.fc2,
             dropout_module=self.dropout_module,
-        )
-        return x
+        )[0]
 
 
 class TransformerEncoderLayerBase(nn.Module):
@@ -140,7 +155,12 @@ class TransformerEncoderLayerBase(nn.Module):
         )
         self.normalize_before = cfg.encoder.normalize_before
         self.is_moe_layer = is_moe_layer
+        self.prefix_token_positions = (
+            [0] if cfg.encoder_langtok in ["src", "tgt"] else None
+        )
         ffn_dim = cfg.encoder.ffn_embed_dim
+        self.attn_ln = LayerNorm(self.embed_dim) if cfg.scale_attn else None
+        self.ffn_layernorm = LayerNorm(ffn_dim) if cfg.scale_fc else None
         if self.is_moe_layer and cfg.alternate_ffn_embed_dim > 0:
             ffn_dim = cfg.alternate_ffn_embed_dim
         # the second condition is for a "pseudo" MoE layer
@@ -174,6 +194,7 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
+                    use_tutel=cfg.use_tutel_moe,
                 )
             else:
                 gate = Top2Gate(
@@ -184,19 +205,26 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
+                    use_tutel=cfg.use_tutel_moe,
+                    init_model_on_gpu=cfg.init_model_on_gpu,
                 )
             experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
-            self.moe_layer = MOELayer(gate, experts, cfg)
+            self.moe_layer = MOELayer(
+                gate,
+                experts,
+                cfg,
+                max_positions=cfg.max_source_positions,
+            )
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
+            Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
         )
 
     def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
+            Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
         )
 
     def _get_fc_rank(self, remove_num: int) -> List[int]:
@@ -262,6 +290,8 @@ class TransformerEncoderLayerBase(nn.Module):
             self_attention=True,
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
+            scale_heads=cfg.scale_heads,
+            use_fused_softmax=cfg.use_fused_softmax,
         )
 
     def residual_connection(self, x, residual):
@@ -286,6 +316,7 @@ class TransformerEncoderLayerBase(nn.Module):
         x,
         encoder_padding_mask: Optional[Tensor],
         attn_mask: Optional[Tensor] = None,
+        tokens: Optional[Tensor] = None,
     ):
         """
         Args:
@@ -323,6 +354,8 @@ class TransformerEncoderLayerBase(nn.Module):
             need_weights=False,
             attn_mask=attn_mask,
         )
+        if self.attn_ln is not None:
+            x = self.attn_ln(x)
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -332,21 +365,32 @@ class TransformerEncoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.final_layer_norm(x)
         if not self.is_moe_layer or self.cfg.alternate_ffn_embed_dim > 0:
-            x = self.activation_fn(self.fc1(x))
-            x = self.activation_dropout_module(x)
-            x = self.fc2(x)
-
-            fc_result = x
-
-            x = self.dropout_module(x)
+            x, fc_result = _ffn(
+                x,
+                self.fc1,
+                self.activation_fn,
+                self.activation_dropout_module,
+                self.fc2,
+                self.dropout_module,
+                ffn_ln=self.ffn_layernorm,
+            )
             l_aux = None
         else:
             # x - seq_len, batch_size, model_dim
             x = x.transpose(0, 1)  # batch_size, seq_len, model_dim
+            prefix_tokens = (
+                tokens[:, self.prefix_token_positions]
+                if tokens is not None and self.prefix_token_positions is not None
+                else None
+            )
             if self.cfg.use_moe_pad_mask:
-                x, l_aux = self.moe_layer(x, input_padding_mask=encoder_padding_mask)
+                x, l_aux = self.moe_layer(
+                    x,
+                    input_padding_mask=encoder_padding_mask,
+                    prefix_tokens=prefix_tokens,
+                )
             else:
-                x, l_aux = self.moe_layer(x)
+                x, l_aux = self.moe_layer(x, prefix_tokens=prefix_tokens)
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -359,8 +403,12 @@ class TransformerEncoderLayerBase(nn.Module):
 
 # backward compatible with the legacy argparse format
 class TransformerEncoderLayer(TransformerEncoderLayerBase):
-    def __init__(self, args):
-        super().__init__(TransformerConfig.from_namespace(args))
+    def __init__(self, args, return_fc=False, is_moe_layer=False):
+        super().__init__(
+            TransformerConfig.from_namespace(args),
+            return_fc=return_fc,
+            is_moe_layer=is_moe_layer,
+        )
         self.args = args
 
     def build_self_attention(self, embed_dim, args):
@@ -397,6 +445,9 @@ class TransformerDecoderLayerBase(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.embed_dim = cfg.decoder.embed_dim
+        if has_megatron_fused_kernels and cfg.activation_fn == "gelu":
+            load_megatron_fused_kernel()
+
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
         )
@@ -404,6 +455,11 @@ class TransformerDecoderLayerBase(nn.Module):
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
 
         self.cross_self_attention = cfg.cross_self_attention
+        self.attn_ln = LayerNorm(self.embed_dim) if cfg.scale_attn else None
+
+        init_model_on_gpu = cfg.init_model_on_gpu
+        if self.attn_ln is not None and init_model_on_gpu:
+            self.attn_ln = self.attn_ln.cuda().half()
 
         self.self_attn = self.build_self_attention(
             self.embed_dim,
@@ -411,31 +467,30 @@ class TransformerDecoderLayerBase(nn.Module):
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
         )
-        self.attn_ln = (
-            LayerNorm(self.embed_dim)
-            if utils.safe_getattr(cfg, "scale_attn", False)
-            else None
-        )
         self.nh = self.self_attn.num_heads
         self.head_dim = self.self_attn.head_dim
         scale_heads = utils.safe_getattr(cfg, "scale_heads", False)
+        init_tensor = torch.ones((self.nh,))
+        if init_model_on_gpu:
+            init_tensor = init_tensor.cuda().half()
         self.c_attn = (
-            nn.Parameter(torch.ones((self.nh,)), requires_grad=True)
-            if scale_heads
-            else None
+            nn.Parameter(init_tensor, requires_grad=True) if scale_heads else None
         )
 
-        self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
-        activation_dropout_p = cfg.activation_dropout
-        if activation_dropout_p == 0:
-            # for backwards compatibility with models that use cfg.relu_dropout
-            activation_dropout_p = cfg.relu_dropout or 0
-        self.activation_dropout_module = FairseqDropout(
-            float(activation_dropout_p), module_name=self.__class__.__name__
-        )
+        # self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
+        # activation_dropout_p = cfg.activation_dropout
+        # if activation_dropout_p == 0:
+        #     # for backwards compatibility with models that use cfg.relu_dropout
+        #     activation_dropout_p = cfg.relu_dropout or 0
+        # self.activation_dropout_module = FairseqDropout(
+        #     float(activation_dropout_p), module_name=self.__class__.__name__
+        # )
         self.normalize_before = cfg.decoder.normalize_before
 
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+
+        if init_model_on_gpu:
+            self.self_attn_layer_norm = self.self_attn_layer_norm.cuda().half()
 
         if no_encoder_attn:
             self.encoder_attn = None
@@ -444,29 +499,19 @@ class TransformerDecoderLayerBase(nn.Module):
             self.encoder_attn = self.build_encoder_attention(self.embed_dim, cfg)
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
-        self.ffn_layernorm = (
-            LayerNorm(cfg.decoder.ffn_embed_dim)
-            if utils.safe_getattr(cfg, "scale_fc", False)
-            else None
-        )
-        self.w_resid = (
-            nn.Parameter(
-                torch.ones(
-                    self.embed_dim,
-                ),
-                requires_grad=True,
-            )
-            if utils.safe_getattr(cfg, "scale_resids", False)
-            else None
-        )
+            if init_model_on_gpu:
+                self.encoder_attn_layer_norm = (
+                    self.encoder_attn_layer_norm.cuda().half()
+                )
 
         self.is_moe_layer = is_moe_layer
-        print("is moe layer", self.is_moe_layer)
+        self.prefix_token_positions = [1] if cfg.decoder_langtok else None
 
         ffn_dim = cfg.decoder.ffn_embed_dim
         if self.is_moe_layer and cfg.alternate_decoder_ffn_embed_dim > 0:
             ffn_dim = cfg.alternate_decoder_ffn_embed_dim
 
+        self.alpha2 = None
         if not self.is_moe_layer or cfg.alternate_decoder_ffn_embed_dim > 0:
             self.activation_fn = utils.get_activation_fn(
                 activation=str(cfg.activation_fn)
@@ -485,21 +530,41 @@ class TransformerDecoderLayerBase(nn.Module):
                 ffn_dim,
                 self.quant_noise,
                 self.quant_noise_block_size,
+                init_model_on_gpu=init_model_on_gpu,
             )
+            self.ffn_layernorm = (
+                LayerNorm(cfg.decoder.ffn_embed_dim)
+                if utils.safe_getattr(cfg, "scale_fc", False)
+                else None
+            )
+            if self.ffn_layernorm and init_model_on_gpu:
+                self.ffn_layernorm = self.ffn_layernorm.cuda().half()
+
+            if utils.safe_getattr(cfg, "scale_resids", False):
+                self.alpha2 = nn.Parameter(
+                    torch.ones(
+                        self.embed_dim,
+                        device=torch.cuda.current_device(),
+                        dtype=torch.float16,
+                    ),
+                    requires_grad=True,
+                )
             self.fc2 = self.build_fc2(
                 ffn_dim,
                 self.embed_dim,
                 self.quant_noise,
                 self.quant_noise_block_size,
+                init_model_on_gpu=init_model_on_gpu,
             )
         else:
-            print("Building MoE layer")
             if cfg.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
+                    use_tutel=cfg.use_tutel_moe,
+                    init_model_on_gpu=init_model_on_gpu,
                 )
             else:
                 gate = Top2Gate(
@@ -510,20 +575,53 @@ class TransformerDecoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
+                    use_tutel=cfg.use_tutel_moe,
+                    init_model_on_gpu=init_model_on_gpu,
                 )
             experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
-            self.moe_layer = MOELayer(gate, experts, cfg)
+            self.moe_layer = MOELayer(
+                gate,
+                experts,
+                cfg,
+                max_positions=cfg.max_target_positions,
+            )
 
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+        if init_model_on_gpu:
+            self.final_layer_norm = self.final_layer_norm.cuda().half()
+            for p in self.modules():
+                p = p.cuda().half()
         self.need_attn = True
 
         self.onnx_trace = False
 
-    def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
-        return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
+    def build_fc1(
+        self,
+        input_dim,
+        output_dim,
+        q_noise,
+        qn_block_size,
+        init_model_on_gpu=False,
+    ):
+        return quant_noise(
+            Linear(input_dim, output_dim, init_model_on_gpu=init_model_on_gpu),
+            q_noise,
+            qn_block_size,
+        )
 
-    def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
-        return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
+    def build_fc2(
+        self,
+        input_dim,
+        output_dim,
+        q_noise,
+        qn_block_size,
+        init_model_on_gpu=False,
+    ):
+        return quant_noise(
+            Linear(input_dim, output_dim, init_model_on_gpu=init_model_on_gpu),
+            q_noise,
+            qn_block_size,
+        )
 
     def build_self_attention(
         self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False
@@ -537,6 +635,9 @@ class TransformerDecoderLayerBase(nn.Module):
             self_attention=not cfg.cross_self_attention,
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
+            use_fused_softmax=cfg.use_fused_softmax,
+            scale_heads=cfg.scale_heads_inside,
+            init_model_on_gpu=cfg.init_model_on_gpu,
         )
 
     def build_encoder_attention(self, embed_dim, cfg):
@@ -549,13 +650,18 @@ class TransformerDecoderLayerBase(nn.Module):
             encoder_decoder_attention=True,
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
+            use_fused_softmax=cfg.use_fused_softmax,
+            init_model_on_gpu=cfg.init_model_on_gpu,
         )
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
 
-    def residual_connection(self, x, residual):
-        return residual + x
+    def residual_connection(self, x, residual, alpha=None):
+        if alpha is None:
+            return residual + x
+        else:
+            return x + torch.mul(alpha, residual)
 
     def forward(
         self,
@@ -569,6 +675,7 @@ class TransformerDecoderLayerBase(nn.Module):
         self_attn_padding_mask: Optional[torch.Tensor] = None,
         need_attn: bool = False,
         need_head_weights: bool = False,
+        tokens: Optional[Tensor] = None,
     ):
         """
         Args:
@@ -579,6 +686,7 @@ class TransformerDecoderLayerBase(nn.Module):
             need_attn (bool, optional): return attention weights
             need_head_weights (bool, optional): return attention weights
                 for each head (default: return average over heads).
+            tokens (Tensor, optional): previous output tokens.
 
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
@@ -636,7 +744,7 @@ class TransformerDecoderLayerBase(nn.Module):
         if self.c_attn is not None:
             tgt_len, bsz = x.size(0), x.size(1)
             x = x.view(tgt_len, bsz, self.nh, self.head_dim)
-            x = torch.einsum("tbhd,h->tbhd", x, self.c_attn)
+            x = torch.einsum("tbhd,h->tbdh", x, self.c_attn)
             x = x.reshape(tgt_len, bsz, self.embed_dim)
         if self.attn_ln is not None:
             x = self.attn_ln(x)
@@ -679,11 +787,12 @@ class TransformerDecoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.final_layer_norm(x)
         if not self.is_moe_layer or self.cfg.alternate_decoder_ffn_embed_dim > 0:
-            x = _ffn(
+            x, _ = _ffn(
                 x,
                 fc1=self.fc1,
                 activation_fn=self.activation_fn,
                 activation_dropout_module=self.activation_dropout_module,
+                ffn_ln=self.ffn_layernorm,
                 fc2=self.fc2,
                 dropout_module=self.dropout_module,
             )
@@ -691,12 +800,21 @@ class TransformerDecoderLayerBase(nn.Module):
         else:
             # x - seq_len, batch_size, model_dim
             x = x.transpose(0, 1)  # batch_size, seq_len, model_dim
+            prefix_tokens = (
+                tokens[:, self.prefix_token_positions]
+                if tokens is not None and self.prefix_token_positions is not None
+                else None
+            )
             if self.cfg.use_moe_pad_mask:
-                x, l_aux = self.moe_layer(x, input_padding_mask=self_attn_padding_mask)
+                x, l_aux = self.moe_layer(
+                    x,
+                    input_padding_mask=self_attn_padding_mask,
+                    prefix_tokens=prefix_tokens,
+                )
             else:
-                x, l_aux = self.moe_layer(x)
+                x, l_aux = self.moe_layer(x, prefix_tokens=prefix_tokens)
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
-        x = self.residual_connection(x, residual)
+        x = self.residual_connection(x, residual, alpha=self.alpha2)
         if not self.normalize_before:
             x = self.final_layer_norm(x)
         if self.onnx_trace and incremental_state is not None:

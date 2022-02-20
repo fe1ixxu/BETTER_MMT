@@ -14,8 +14,9 @@ import re
 import time
 import traceback
 from collections import OrderedDict
+from glob import glob
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -302,7 +303,7 @@ def load_checkpoint(cfg: CheckpointConfig, trainer, **passthrough_args):
                 )
             else:
                 raise ValueError(
-                    f"--funetune-from-model {cfg.finetune_from_model} does not exist"
+                    f"--finetune-from-model {cfg.finetune_from_model} does not exist"
                 )
     elif suffix is not None:
         checkpoint_path = cfg.restore_file.replace(".pt", suffix + ".pt")
@@ -348,9 +349,50 @@ def load_checkpoint(cfg: CheckpointConfig, trainer, **passthrough_args):
     return extra_state, epoch_itr
 
 
+def is_checkpoint_sharded(checkpoint_files) -> bool:
+    "Infer if state is sharded based on whether largest file is more than 10% larger than smallest."
+    if not checkpoint_files:
+        return False
+    sizes = [os.path.getsize(p) for p in checkpoint_files]
+    size_ratio = max(sizes) / min(sizes)
+    if size_ratio >= 1.1:
+        return False
+    else:
+        return True
+
+
+def get_paths_to_load(local_path, suffix="rank-"):
+    checkpoint_files = glob(re.sub(f"{suffix}[0-9]+", f"{suffix}*", local_path))
+    if not is_checkpoint_sharded(checkpoint_files):
+        return [local_path]
+    checkpoint_files_count = len(checkpoint_files)
+    world_size = dist_utils.get_data_parallel_world_size()
+    fnames = []
+    if world_size >= checkpoint_files_count:
+        return [local_path]
+
+    assert checkpoint_files_count % world_size == 0
+
+    n_local_files = int(checkpoint_files_count / world_size)
+    logger.info(
+        f"Loading {checkpoint_files_count} on {world_size} workers: {n_local_files} files per worker."
+    )
+
+    rank = dist_utils.get_data_parallel_rank()
+    start_rank = n_local_files * rank  #
+    for rank_to_load in range(start_rank, start_rank + n_local_files):
+        fname = re.sub(
+            f"{suffix}[0-9]+",
+            f"{suffix}{rank_to_load}",
+            local_path,
+        )
+        fnames.append(fname)
+    return fnames
+
+
 def load_checkpoint_to_cpu(
     path, arg_overrides=None, load_on_all_ranks=False, is_moe=False
-):
+) -> dict:
     """Loads a checkpoint to CPU (with upgrading for backward compatibility).
 
     If doing single-GPU training or if the checkpoint is only being loaded by at
@@ -385,16 +427,21 @@ def load_checkpoint_to_cpu(
 
     # path to checkpoint...-shared.pt
     shared_path = re.sub("rank-[0-9]+", "shared", local_path)
+    paths_to_load = get_paths_to_load(local_path, suffix="rank-" if is_moe else "shard")
     if is_moe and os.path.exists(shared_path):
         expert_state = moe_checkpoint_utils.load_expert_state(
-            local_path
+            paths_to_load
         )  # Possibly merge experts
         shared_state = torch_load_cpu(shared_path)
         state = moe_checkpoint_utils.merge_expert_and_shared_state(
             expert_state, shared_state
         )
     else:
-        state = torch_load_cpu(local_path)
+        if len(paths_to_load) > 1:
+            state = _merge_flat_fsdp_shards([torch_load_cpu(f) for f in paths_to_load])
+        else:
+            state = torch_load_cpu(local_path)
+    logger.info("Rank 0: Done reading from disk")
 
     if "args" in state and state["args"] is not None and arg_overrides is not None:
         args = state["args"]
@@ -541,7 +588,9 @@ def load_model_ensemble_and_task(
     state=None,
     is_moe=False,
 ):
+
     logger.info("load_model_ensemble_and_task is_moe={}".format(is_moe))
+
     assert state is None or len(filenames) == 1
 
     from fairseq import tasks
@@ -551,6 +600,7 @@ def load_model_ensemble_and_task(
     ), "Cannot load state dict with strict=True and checkpoint shards > 1"
     ensemble = []
     cfg = None
+
     for filename in filenames:
         orig_filename = filename
         model_shard_state = {"shard_weights": [], "shard_metadata": []}
@@ -563,6 +613,7 @@ def load_model_ensemble_and_task(
 
             if not PathManager.exists(filename):
                 raise IOError("Model file not found: {}".format(filename))
+
             if state is None:
                 state = load_checkpoint_to_cpu(filename, arg_overrides, is_moe=is_moe)
             if "args" in state and state["args"] is not None:
@@ -635,13 +686,15 @@ def load_model_ensemble_and_task(
                 if (
                     hasattr(cfg.model, "langs")
                     and hasattr(task, "langs")
+                    and cfg.model.langs
+                    and task.langs
                     and cfg.model.langs != task.langs
                 ):
                     upgrade_state_for_langs_difference(state, cfg.model, task)
                 model.load_state_dict(
                     state["model"], strict=strict, model_cfg=cfg.model
                 )
-
+                logger.info("Done loading state dict")
             # reset state so it gets loaded for the next model in ensemble
             state = None
             if shard_idx % 10 == 0 and shard_idx > 0:
@@ -1075,3 +1128,79 @@ def load_ema_from_checkpoint(fpath):
 
     new_state["model"] = params_dict
     return new_state
+
+
+OPT_KEY = moe_checkpoint_utils.OPT_KEY
+from collections import defaultdict
+
+
+def _merge_flat_fsdp_shards(shards_to_load: List[Dict]) -> Dict:
+    """Concatenate tensor entries in a list of local_state_dicts  into one local_state_dict to allow resumption on a different world size."""
+    merged_state = {}
+    world_size = dist_utils.get_data_parallel_world_size()
+    for key in shards_to_load[0].keys():
+        merged_state[key] = shards_to_load[0][key]
+
+    pad_info = _get_pad_info(shards_to_load[-1])
+    dtype = torch.float16
+    for k in shards_to_load[0]["model"]:
+        dtype = shards_to_load[0]["model"][k].dtype
+        if "flat_param" in k:
+            pad_info_k = pad_info[k]
+            catted = torch.cat([x["model"][k] for x in shards_to_load])
+            if world_size == 1 and pad_info_k > 0:
+                catted = catted[:-pad_info_k]
+            elif world_size > 1 and pad_info_k > 0:
+                raise NotImplementedError(
+                    f"Param {k} padded with {pad_info_k} extra elements. You must use the consolidate script."
+                )
+            merged_state["model"][k] = catted
+
+    if "decoder.version" not in merged_state["model"]:
+        merged_state["model"]["decoder.version"] = torch.tensor([3.0], dtype=dtype)
+    if OPT_KEY in merged_state:
+        merged_state[OPT_KEY] = _merge_flat_fsdp_opt_state(shards_to_load)
+    return merged_state
+
+
+def _merge_flat_fsdp_opt_state(shards_to_load: List[Dict]) -> Dict:
+    """Logic described here: https://tinyurl.com/2p86zffr"""
+    result = shards_to_load[0][OPT_KEY]
+    pad_info = _get_pad_info(shards_to_load[-1])
+    world_size = dist_utils.get_data_parallel_world_size()
+    os2model_key = dict(
+        zip(shards_to_load[0][OPT_KEY]["state"].keys(), pad_info.keys())
+    )
+    for k in shards_to_load[0][OPT_KEY]["state"].keys():
+        # 0,1,2,3... if each layer wrapped, else 0
+        for k2 in shards_to_load[0][OPT_KEY]["state"][k].keys():
+            # exp_avg, exp_avg_sq, step (for adam32 bit)
+            states = [x[OPT_KEY]["state"][k][k2] for x in shards_to_load]
+            if not torch.is_tensor(states[0]) or is_singleton_tensor(states[0]):
+                result["state"][k][k2] = states[0]
+            else:
+                catted = torch.cat(states)
+                pad_info_k = pad_info[os2model_key[k]]
+                if world_size == 1 and pad_info_k > 0:  # unpad
+                    catted = catted[:-pad_info_k]
+                result["state"][k][k2] = catted
+    return result
+
+
+def is_singleton_tensor(x: Any) -> bool:
+    """Is x a dimensionless tensor?"""
+    return torch.is_tensor(x) and x.dim() == 0
+
+
+def _get_pad_info(state_dict: Dict) -> Dict[str, int]:
+    if "shard_metadata" not in state_dict:
+        # Note: comment this out if you have sharded checkpoints that you think can be loaded
+        return defaultdict(lambda: 0)
+    res = {}
+    for m in state_dict["shard_metadata"]["param_metadata"]:
+        fsdp_path = m["fsdp_path"]
+        for k, v in m["params"].items():
+            full_key = f"{fsdp_path}.{k}" if fsdp_path else k
+            assert full_key not in res, f"collision: {full_key} already in {res}"
+            res[full_key] = v["padding"]
+    return res

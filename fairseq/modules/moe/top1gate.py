@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from .moe_layer import get_fused_cumsum_sub_one
 from .top2gate import entropy, one_hot
 
 # maximum capacity of 1 expert as a fraction of number of tokens in the batch
@@ -34,6 +35,9 @@ def top1gating(
     capacity_factor=1.0,
     eval_mode=False,
     moe_eval_capacity_token_fraction=EVAL_CAPACITY_TOKEN_FRACTION,
+    moe_eval_capacity_length=None,
+    use_tutel=False,
+    prefix_tokens=None,
 ) -> Tuple[Tensor, Tensor, Tensor, Dict]:
     """Implements Top2Gating on logits."""
     metadata = {}
@@ -48,7 +52,12 @@ def top1gating(
     num_tokens = gates.shape[0]
     num_experts = gates.shape[1]
     if moe_eval_capacity_token_fraction > 0.0 and eval_mode:
-        capacity = math.ceil(moe_eval_capacity_token_fraction * num_tokens)
+        if moe_eval_capacity_length is None:
+            capacity = math.ceil(moe_eval_capacity_token_fraction * num_tokens)
+        else:
+            capacity = math.ceil(
+                moe_eval_capacity_token_fraction * moe_eval_capacity_length
+            )
     else:
         # capacity = capacity_factor * S/E
         capacity = int(capacity_factor * math.ceil(num_tokens / num_experts))
@@ -81,13 +90,32 @@ def top1gating(
     gates1_s = (gates * mask1).sum(dim=1)
 
     # Compute locations in capacity buffer
-    locations1 = torch.cumsum(mask1, dim=0) - 1
+    locations1 = get_fused_cumsum_sub_one(use_tutel)(mask1)
 
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
     l_aux = torch.mean(me * ce)
     l_aux = l_aux * num_experts * num_experts
+
+    if use_tutel:
+        locations1_s = torch.sum(locations1 * mask1, dim=1)
+        return (
+            l_aux,
+            metadata,
+            capacity,
+            num_experts,
+            [
+                indices1_s,
+            ],
+            [
+                locations1_s,
+            ],
+            [
+                gates1_s,
+            ],
+        )
+
     # Remove locations outside capacity from mask
     mask1 = mask1 * torch.lt(locations1, capacity)
     # Store the capacity location for each token
@@ -109,6 +137,9 @@ def top1gating(
         return l_aux, combine1_sec, dispatch_mask, metadata
 
 
+from fairseq.modules.linear import Linear
+
+
 class Top1Gate(torch.nn.Module):
     """Gate module which implements Top2Gating as described in Gshard_.
     ::
@@ -125,7 +156,7 @@ class Top1Gate(torch.nn.Module):
             number of experts in model
     """
 
-    wg: torch.nn.Linear
+    wg: Linear
 
     def __init__(
         self,
@@ -135,20 +166,27 @@ class Top1Gate(torch.nn.Module):
         input_noise_type=None,
         capacity_factor=1.0,
         moe_eval_capacity_token_fraction=EVAL_CAPACITY_TOKEN_FRACTION,
+        use_tutel=False,
+        init_model_on_gpu=False,
     ) -> None:
         # TODO: merge this to top2gate.py
         #
         super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
+        self.wg = Linear(
+            model_dim, num_experts, bias=False, init_model_on_gpu=init_model_on_gpu
+        )
         self.use_fp32 = use_fp32
         self.input_noise_type = input_noise_type
         self.capacity_factor = capacity_factor
         self.moe_eval_capacity_token_fraction = moe_eval_capacity_token_fraction
+        self.use_tutel = use_tutel
 
     def forward(
         self,
         input: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        moe_eval_capacity_length: Optional[int] = None,
+        prefix_tokens: Optional[torch.Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Dict]:  # type: ignore
         logits = self.wg(input)
         return top1gating(
@@ -158,4 +196,7 @@ class Top1Gate(torch.nn.Module):
             capacity_factor=self.capacity_factor,
             eval_mode=not self.training,
             moe_eval_capacity_token_fraction=self.moe_eval_capacity_token_fraction,
+            moe_eval_capacity_length=moe_eval_capacity_length,
+            use_tutel=self.use_tutel,
+            prefix_tokens=prefix_tokens,
         )

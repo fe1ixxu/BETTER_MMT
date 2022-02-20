@@ -408,6 +408,7 @@ def clip_grad_norm_(params, max_norm, aggregate_norm_fn=None) -> torch.Tensor:
             dist.all_reduce(split_norm)
             split_norm.sqrt_()
         norms.append(split_norm)
+
     if len(norms) > 1:
         total_norm = torch.norm(torch.stack(norms))
 
@@ -598,6 +599,7 @@ def get_activation_fn(activation: str) -> Callable:
 def get_available_activation_fns() -> List:
     return [
         "relu",
+        "relu_squared",
         "gelu",
         "gelu_fast",  # deprecated
         "gelu_accurate",
@@ -884,3 +886,9 @@ def print_mem(msg):
     gb_denom = 1024**3
     mem_info = f"max_GB: {torch.cuda.max_memory_allocated()/gb_denom:.1f}, current_GB: {torch.cuda.memory_allocated()/gb_denom:.1f}"
     print_r0(f"{msg}: {mem_info}")
+
+
+def remove_prefix(text: str, prefix: str):
+    if text.startswith(prefix):
+        return text[len(prefix) :]
+    return text

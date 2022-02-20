@@ -135,6 +135,12 @@ class TransformerLanguageModelConfig(FairseqDataclass):
         default=False,
         metadata={"help": "use learned positional embeddings in the decoder"},
     )
+    decoder_learned_sinusoidal: bool = field(
+        default=False,
+        metadata={
+            "help": "use learned positional embeddings init with sinusoidal in the decoder"
+        },
+    )
     layernorm_embedding: bool = field(
         default=False, metadata={"help": "add layernorm to embedding"}
     )
@@ -225,6 +231,12 @@ class TransformerLanguageModelConfig(FairseqDataclass):
             "help": "Default: 0.25, Fraction of tokens as capacity during validation, if set to negative, use same as training. range: (0.0, 1.0]."
         },
     )
+    moe_eval_capacity_max_seqlen: bool = field(
+        default=False,
+        metadata={
+            "help": "Multiply the MoE capacity factor by the max sequence length instead of the current sequence length to get the effective expert capacity during validation"
+        },
+    )
     moe_normalize_expert_grad: Optional[str] = field(
         default="world_size",
         metadata={
@@ -260,6 +272,31 @@ class TransformerLanguageModelConfig(FairseqDataclass):
             "argparse_alias": "--stable-emb",
         },
     )
+    # NormFormer
+    scale_fc: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Insert LayerNorm between fully connected layers",
+        },
+    )
+    scale_attn: Optional[bool] = field(
+        default=False, metadata={"help": "Insert LayerNorm after attention"}
+    )
+    scale_heads: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Learn a scale coefficient for each attention head"},
+    )
+    scale_heads_inside: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Learn a scale coefficient for each attention head. Doing the math inside the attention head is slower"
+        },
+    )
+    scale_resids: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Learn a scale coefficient for each residual connection"},
+    )
+    # options from other parts of the config
 
     # config for "BASE Layers: Simplifying Training of Large, Sparse Models"
     base_layers: Optional[int] = field(
@@ -272,21 +309,23 @@ class TransformerLanguageModelConfig(FairseqDataclass):
         default=1,
         metadata={"help": "shuffle tokens between workers before computing assignment"},
     )
-    # NormFormer
-    scale_fc: Optional[bool] = field(
+    # ALiBi
+    alibi: bool = field(
         default=False,
-        metadata={"help": "Insert LayerNorm between fully connected layers"},
+        metadata={
+            "help": "use the ALiBi position method instead of regular position embeddings"
+        },
     )
-    scale_attn: Optional[bool] = field(
-        default=False, metadata={"help": "Insert LayerNorm after attention"}
+    use_fused_softmax: bool = field(
+        default=False, metadata={"help": "use Megatron softmax kernel"}
     )
-    scale_heads: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Learn a scale coefficient for each attention head"},
+
+    no_emb_dropout: Optional[bool] = field(
+        default=False, metadata={"help": "Avoid emb dropout for decoder"}
     )
-    scale_resids: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Learn a scale coefficient for each residual connection"},
+
+    init_model_on_gpu: Optional[bool] = field(
+        default=False, metadata={"help": "Initialize model on GPUs."}
     )
     # options from other parts of the config
     add_bos_token: bool = II("task.add_bos_token")
@@ -301,6 +340,7 @@ class TransformerLanguageModelConfig(FairseqDataclass):
     distributed_rank: int = II("distributed_training.distributed_rank")
     batch_size: Optional[int] = II("dataset.batch_size")
     batch_size_valid: Optional[int] = II("dataset.batch_size_valid")
+    use_tutel_moe: bool = II("common.use_tutel_moe")
 
 
 @register_model("transformer_lm", dataclass=TransformerLanguageModelConfig)
@@ -345,7 +385,7 @@ class TransformerLanguageModel(FairseqLanguageModel):
     @classmethod
     def build_model(cls, args, task):
         """Build a new model instance."""
-
+        args.decoder_layers_to_keep = getattr(args, "decoder_layers_to_keep", None)
         if args.decoder_layers_to_keep:
             args.decoder_layers = len(args.decoder_layers_to_keep.split(","))
 
@@ -397,6 +437,18 @@ class TransformerLanguageModel(FairseqLanguageModel):
                 args.fp16_no_flatten_grads
             ), "If training moe models, set --fp16-no-flatten-grads to calculate correct gradnorm"
 
+        if getattr(args, "use_tutel_moe", False):
+            try:
+                # To enable Tutel MoE optimizations:
+                #   python3 -m pip install --user https://github.com/microsoft/tutel/releases/download/v0.1.0/tutel-0.1.0.tar.gz
+                from tutel import moe as tutel_moe
+
+                logger.info("Using microsoft Tutel plugin for fused function in MoE")
+            except ModuleNotFoundError:
+                raise ImportError(
+                    "Please install https://github.com/microsoft/tutel/ for --use-tutel-moe"
+                )
+
         decoder = TransformerDecoder(
             args,
             task.target_dictionary,
@@ -414,10 +466,21 @@ class TransformerLanguageModel(FairseqLanguageModel):
                 logger.warning(
                     "It is recommended to pass --no-scale-embedding with --use-stable-embedding"
                 )
-            return bnb.nn.StableEmbedding(len(dictionary), embed_dim, dictionary.pad())
+
+            emb = bnb.nn.StableEmbedding(len(dictionary), embed_dim, dictionary.pad())
+            # hardcode init_model_on_gpu
+            if getattr(args, "init_model_on_gpu", False):
+                return emb.cuda().half()
+            else:
+                return emb
 
         else:
-            return Embedding(len(dictionary), embed_dim, dictionary.pad())
+            return Embedding(
+                len(dictionary),
+                embed_dim,
+                dictionary.pad(),
+                init_model_on_gpu=getattr(args, "init_model_on_gpu", False),
+            )
 
 
 def base_lm_architecture(args):
@@ -491,6 +554,7 @@ def base_lm_architecture(args):
     args.scale_resids = safe_getattr(args, "scale_resids", False)
     if args.offload_activations:
         args.checkpoint_activations = True
+    args.init_model_on_gpu = getattr(args, "init_model_on_gpu", False)
 
 
 @register_model_architecture("transformer_lm", "transformer_lm_big")

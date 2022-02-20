@@ -147,31 +147,11 @@ def merge_multi_local_expert_states(expert_states: List[Dict]) -> Dict:
     return merged_expert_state
 
 
-def load_expert_state(local_path):
-    checkpoint_files_count = len(glob(re.sub("rank-[0-9]+", "rank-*", local_path)))
-    world_size = distributed_utils.get_data_parallel_world_size()
-    rank = distributed_utils.get_data_parallel_rank()
-    if world_size < checkpoint_files_count:
-        assert checkpoint_files_count % world_size == 0
-        logger.info(
-            f"Found total {checkpoint_files_count} expert files and"
-            f" current distributed world size: {world_size},"
-            " Stitching experts to able to load on current world size."
-        )
-        local_expert_count = int(checkpoint_files_count / world_size)
-        start_rank = local_expert_count * rank
-        expert_states = []
-        for expert_rank in range(start_rank, start_rank + local_expert_count):
-            fname = re.sub(
-                "rank-[0-9]+",
-                "rank-{0}".format(expert_rank),
-                local_path,
-            )
-            expert_states.append(torch_load_cpu(fname))
-        expert_state = merge_multi_local_expert_states(expert_states)
+def load_expert_state(fnames):
+    if len(fnames) == 1:
+        return torch_load_cpu(fnames[0])
     else:
-        expert_state = torch_load_cpu(local_path)
-    return expert_state
+        return merge_multi_local_expert_states([torch_load_cpu(f) for f in fnames])
 
 
 def assert_equal(a, b, msg=""):

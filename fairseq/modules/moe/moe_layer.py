@@ -17,14 +17,30 @@ from torch.cuda import Event as CudaEvent
 from torch.nn import Module, ModuleList
 
 from fairseq import distributed_utils
+from fairseq.modules.linear import Linear
 
 if TYPE_CHECKING:
     Base = Module[Tensor]
 else:
     Base = Module
 
-
 logger = logging.getLogger(__name__)
+
+try:
+    # To enable Tutel MoE optimizations:
+    #   python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@v0.1.x
+    from tutel import moe as tutel_moe
+
+    has_tutel = True
+except (ModuleNotFoundError, AssertionError):
+    # import raises AssertionError without CUDA
+    has_tutel = False
+
+
+def get_fused_cumsum_sub_one(use_tutel):
+    if use_tutel:
+        return tutel_moe.fast_cumsum_sub_one
+    return lambda mask: torch.cumsum(mask, dim=0) - 1
 
 
 # einsum dimensions: (g)roup, (s)equence, (e)xpert, (m)odel, (c)apacity
@@ -74,6 +90,8 @@ class MOELayer(Base):
         args,
         group: Optional[Any] = None,
         all2all_group: Optional[Any] = None,
+        max_positions: Optional[int] = None,
+        init_model_on_gpu: Optional[bool] = False,
     ) -> None:
         super().__init__()
         self.gate = gate
@@ -100,8 +118,15 @@ class MOELayer(Base):
         self.in_generation = False
         self.a2a_cuda_event_intervals = []
         self.a2a_cpu_time_ms = 0.0
+        self.use_tutel = getattr(args, "use_tutel_moe", False)
+        self.moe_eval_capacity_max_seqlen = getattr(
+            args, "moe_eval_capacity_max_seqlen", False
+        )
+        self.max_positions = max_positions
 
-    def forward(self, *input: Tensor, input_padding_mask=None, **kwargs: Any) -> Tensor:
+    def forward(
+        self, *input: Tensor, input_padding_mask=None, prefix_tokens=None, **kwargs: Any
+    ) -> Tensor:
         assert len(input) == 1, "only single input Tensor supported"
         input = input[0]
         assert (
@@ -161,12 +186,27 @@ class MOELayer(Base):
             else:
                 padded_input_padding_mask[: input_shape[0], :] = False
             input_padding_mask = padded_input_padding_mask
+            if prefix_tokens is not None:
+                padded_prefix_tokens = torch.zeros(
+                    (expected_bsz, prefix_tokens.shape[1]),
+                    dtype=input.dtype,
+                    layout=input.layout,
+                    device=input.device,
+                )
+                padded_prefix_tokens[: input_shape[0], :] = prefix_tokens
+                prefix_tokens = padded_prefix_tokens
 
         # Reshape into S tokens by dropping sequence dimension.
         reshaped_input = input.reshape(-1, d_model)
         reshaped_input_shape = reshaped_input.shape
         reshaped_input_padding_mask = (
             input_padding_mask.reshape(-1) if input_padding_mask is not None else None
+        )
+        # used for tracking some properties per token
+        reshaped_prefix_tokens = (
+            prefix_tokens.repeat(1, input.shape[1]).reshape(-1)
+            if prefix_tokens is not None
+            else None
         )
 
         # Doing padding here when --max-tokens is specified and not --batch-size or --max-sentences
@@ -200,23 +240,54 @@ class MOELayer(Base):
             else:
                 padded_input_padding_mask[: reshaped_input_shape[0]] = False
             reshaped_input_padding_mask = padded_input_padding_mask
+            if reshaped_prefix_tokens is not None:
+                padded_prefix_tokens = torch.zeros(
+                    (expected_dim,),
+                    dtype=prefix_tokens.dtype,
+                    layout=prefix_tokens.layout,
+                    device=prefix_tokens.device,
+                )
+                padded_prefix_tokens[: reshaped_input_shape[0]] = reshaped_prefix_tokens
+                reshaped_prefix_tokens = padded_prefix_tokens
 
-        l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(
-            reshaped_input, reshaped_input_padding_mask
-        )
+        if self.moe_eval_capacity_max_seqlen:
+            eval_capacity_length = self.max_positions * input.shape[0]
+        else:
+            eval_capacity_length = None
+        if self.use_tutel:
+            l_aux, self.metadata, C, E, indices_, locations_, gates_ = self.gate(
+                reshaped_input,
+                reshaped_input_padding_mask,
+                eval_capacity_length,
+                prefix_tokens=reshaped_prefix_tokens,
+            )
+            S, M = reshaped_input.size(0), reshaped_input.size(1)
 
-        dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
-        E, C, S = dispatch_mask.size()
-        M = reshaped_input.size(1)
-        assert reshaped_input.size() == (S, M)
-        # einsum("sec,sm->ecm")
-        dispatched_input = torch.mm(
-            dispatch_mask.view(E * C, S), reshaped_input
-        )  # -> (E*C),M
-
+            if not hasattr(self, "_tutel_dispatcher"):
+                self._tutel_dispatcher = tutel_moe.fast_dispatcher(
+                    E, C, M, dispatch_dtype=reshaped_input.dtype
+                )
+            self._tutel_dispatcher.update(indices_, locations_, gates_, capacity=C)
+            dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
+        else:
+            l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(
+                reshaped_input,
+                reshaped_input_padding_mask,
+                eval_capacity_length,
+                prefix_tokens=reshaped_prefix_tokens,
+            )
+            dispatch_mask = dispatch_mask.to(input.dtype).permute(
+                1, 2, 0
+            )  # S,E,C -> E,C,S
+            E, C, S = dispatch_mask.size()
+            M = reshaped_input.size(1)
+            assert reshaped_input.size() == (S, M)
+            # einsum("sec,sm->ecm")
+            dispatched_input = torch.mm(
+                dispatch_mask.view(E * C, S), reshaped_input
+            )  # -> (E*C),M
         if self.all2all_size > 1:
             dispatched_input = self.all_to_all_wrapper(dispatched_input)
-
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(
             self.all2all_size, self.num_local_experts, -1, d_model
@@ -226,19 +297,23 @@ class MOELayer(Base):
         for chunk, expert in zip(chunks, self.experts):
             expert_outputs += [expert(chunk)]
         expert_output = torch.cat(expert_outputs, dim=1)
-
         if self.all2all_size > 1:
             expert_output = self.all_to_all_wrapper(expert_output)
-
         # Re-shape back: gecm -> ecm
         expert_output = expert_output.reshape(
             self.all2all_size * self.num_local_experts, -1, d_model
         )
 
         # einsum("sec,ecm->sm")
-        combined_output = combine_weights.view(S, E * C).mm(
-            expert_output.view(E * C, M)
-        )
+        if self.use_tutel:
+            combined_output = self._tutel_dispatcher.decode(
+                expert_output.view(E * C, M)
+            )
+        else:
+            # einsum("sec,ecm->sm")
+            combined_output = combine_weights.view(S, E * C).mm(
+                expert_output.view(E * C, M)
+            )
 
         # Remove padding here when --max-tokens is specified and not --batch-size or --max-sentences
         combined_output = combined_output[: reshaped_input_shape[0], :]

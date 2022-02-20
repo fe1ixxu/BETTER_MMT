@@ -294,6 +294,37 @@ class TransformerConfig(FairseqDataclass):
             "help": "if true orders token by the gate prob before capacity dropping."
         },
     )
+    pass_tokens_transformer_layer: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Pass source or masked previous output tokens to the transformer layer."
+        },
+    )
+
+    # NormFormer
+    scale_fc: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Insert LayerNorm between fully connected layers",
+        },
+    )
+    scale_attn: Optional[bool] = field(
+        default=False, metadata={"help": "Insert LayerNorm after attention"}
+    )
+    scale_heads: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Learn a scale coefficient for each attention head"},
+    )
+    scale_heads_inside: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Learn a scale coefficient for each attention head. Doing the math inside the attention head is slower"
+        },
+    )
+    scale_resids: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Learn a scale coefficient for each residual connection"},
+    )
     use_stable_embedding: Optional[bool] = field(
         default=False,
         metadata={
@@ -305,6 +336,24 @@ class TransformerConfig(FairseqDataclass):
     export: bool = field(
         default=False,
         metadata={"help": "make the layernorm exportable with torchscript."},
+    )
+
+    alibi: bool = field(
+        default=False,
+        metadata={
+            "help": "use the ALiBi position method instead of regular position embeddings"
+        },
+    )
+    use_fused_softmax: bool = field(
+        default=False, metadata={"help": "use Megatron softmax kernel"}
+    )
+
+    no_emb_dropout: Optional[bool] = field(
+        default=False, metadata={"help": "Avoid emb dropout for decoder"}
+    )
+
+    init_model_on_gpu: Optional[bool] = field(
+        default=False, metadata={"help": "Initialize model on GPUs."}
     )
 
     # copied from transformer_lm but expected in transformer_decoder:
@@ -321,6 +370,11 @@ class TransformerConfig(FairseqDataclass):
     distributed_rank: int = II("distributed_training.distributed_rank")
     batch_size: Optional[int] = II("dataset.batch_size")
     batch_size_valid: Optional[int] = II("dataset.batch_size_valid")
+    # use_tutel_moe: bool = II("common.use_tutel_moe")
+    use_tutel_moe: bool = field(
+        default=False,
+        metadata={"help": "use tutel moe"},
+    )
 
     # We need to make this hierarchical dataclass like the flat namespace
     # __getattr__ and __setattr__ here allow backward compatibility

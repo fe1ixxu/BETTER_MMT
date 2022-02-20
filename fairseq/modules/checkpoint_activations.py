@@ -19,6 +19,7 @@ def checkpoint_wrapper(module, *args, **kwargs):
             )
 
     module = _checkpoint_wrapper(module, *args, **kwargs)
+
     if hasattr(module, "extra_repr"):
         orig_extra_repr = module.extra_repr
     else:

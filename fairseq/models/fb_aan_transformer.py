@@ -8,13 +8,13 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
+
 from fairseq import utils
 from fairseq.incremental_decoding_utils import with_incremental_state
 from fairseq.models import register_model, register_model_architecture
 from fairseq.models.transformer import TransformerDecoder, TransformerModel
 from fairseq.modules import FairseqDropout, LayerNorm, MultiheadAttention
-from torch import Tensor
-
 
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
@@ -223,9 +223,10 @@ class AANTransformerDecoderLayer(nn.Module):
         if activation_dropout_p == 0:
             # for backwards compatibility with models that use args.relu_dropout
             activation_dropout_p = getattr(args, "relu_dropout", 0)
-            self.activation_dropout_module = FairseqDropout(
-                float(activation_dropout_p), module_name=self.__class__.__name__
-            )
+
+        self.activation_dropout_module = FairseqDropout(
+            float(activation_dropout_p), module_name=self.__class__.__name__
+        )
 
         self.normalize_before = args.decoder_normalize_before
 
@@ -353,6 +354,9 @@ class AANTransformerDecoderLayer(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.final_layer_norm(x)
+
+        l_aux = None  # l_aux used in MoE, for now just assumes no MoE
+
         x = self.activation_fn(self.fc1(x))
         x = self.activation_dropout_module(x)
         x = self.fc2(x)
@@ -360,15 +364,14 @@ class AANTransformerDecoderLayer(nn.Module):
         x = residual + x
         if not self.normalize_before:
             x = self.final_layer_norm(x)
-
-        return x, attn, None
+        return x, attn, None, l_aux
 
     def make_generation_fast_(self, need_attn: bool = False, **kwargs):
         self.need_attn = need_attn
 
 
 class AANTransformerDecoder(TransformerDecoder):
-    def build_decoder_layer(self, args, no_encoder_attn=False):
+    def build_decoder_layer(self, args, no_encoder_attn=False, is_moe_layer=False):
         return AANTransformerDecoderLayer(args, no_encoder_attn)
 
 

@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import os
 from argparse import Namespace
 
 import torch
@@ -11,35 +12,53 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-try:
-    from megatron.model.fused_bias_gelu import bias_gelu_impl
+if torch.cuda.is_available():
+    try:
+        from megatron.model.fused_bias_gelu import bias_gelu_impl
 
-    has_fused_bias_gelu = True
-except ImportError:
+        has_fused_bias_gelu = True
+
+        from megatron import fused_kernels
+
+        has_megatron_fused_kernels = True
+    except ImportError:
+        has_fused_bias_gelu = False
+        has_megatron_fused_kernels = False
+else:
     has_fused_bias_gelu = False
+    has_megatron_fused_kernels = False
 
 
 def load_megatron_fused_kernel():
     """Compile and load fused kernels from Megatron."""
+
+    if not has_megatron_fused_kernels:
+        return
+
     if getattr(load_megatron_fused_kernel, "has_run", False):
         return
     load_megatron_fused_kernel.has_run = True
 
     from argparse import Namespace
 
-    from megatron import fused_kernels
-
     if not torch.distributed.is_initialized():
-        args = Namespace(rank=0, masked_softmax_fusion=True)
+        args = Namespace(rank=0, masked_softmax_fusion=False)
         fused_kernels.load(args)
         return
 
     global_rank = torch.distributed.get_rank()
-    args = Namespace(rank=global_rank, masked_softmax_fusion=True)
+    args = Namespace(rank=global_rank, masked_softmax_fusion=False)
 
     # Always build on rank zero first.
     if global_rank == 0:
-        logger.info("Compiling and loading fused kernels")
+        build_dir = os.path.join(os.path.dirname(fused_kernels.__file__), "build")
+        logger.info(
+            "Compiling and loading fused kernels\n\n"
+            "NOTE: If this hangs here, your megatron fused kernels may be corrupted. "
+            "This can happen if a previous job is interrupted during a build. "
+            "In that case, delete the megatron build directory and relaunch training. "
+            f"The megatron build directory is located at: {build_dir}"
+        )
         fused_kernels.load(args)
         torch.distributed.barrier()
     else:

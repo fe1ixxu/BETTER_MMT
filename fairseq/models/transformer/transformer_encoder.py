@@ -13,16 +13,16 @@ from torch import Tensor
 
 from fairseq import utils
 from fairseq.distributed import fsdp_wrap
-from fairseq.distributed import utils as dist_utils
 from fairseq.models import FairseqEncoder
-from fairseq.models.transformer import TransformerConfig
+from fairseq.models.transformer import DEFAULT_MIN_PARAMS_TO_WRAP, TransformerConfig
+from fairseq.models.transformer.fsdp_wrap_expert import fsdp_wrap_expert
 from fairseq.modules import (
     FairseqDropout,
     LayerDropModuleList,
     LayerNorm,
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    transformer_layer,
+    TransformerEncoderLayer,
 )
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
@@ -34,36 +34,6 @@ def module_name_fordropout(module_name: str) -> str:
         return "TransformerEncoder"
     else:
         return module_name
-
-
-def div_by_world_size(world_size, tensor):
-    return tensor / world_size
-
-
-def fsdp_wrap_expert(cfg, layer, min_num_params=0):
-    # Wrap MoE layer with FSDP using a process group with all replicated ranks
-    process_group = layer.moe_layer.expert_group
-    world_size = dist_utils.get_data_parallel_group().size()
-    pg_size = process_group.size()
-    num_experts = world_size / pg_size
-
-    for i, expert in enumerate(layer.moe_layer.experts):
-        layer.moe_layer.experts[i] = fsdp_wrap(
-            expert, process_group=process_group, min_num_params=0
-        )
-    if cfg.moe_normalize_expert_grad == "sqrt_world_size":
-        expert_normalization_term = math.sqrt(num_experts)
-    else:
-        expert_normalization_term = num_experts
-    for p in layer.moe_layer.experts.parameters():
-        p.expert = True
-        # Scale grads by world_size/pg_size so that grads match the equivalent replicated
-        # world size expected within Trainer
-        p.register_hook(functools.partial(div_by_world_size, expert_normalization_term))
-
-    # Everything else gets wrapped as normal.
-    layer = fsdp_wrap(layer, min_num_params=min_num_params)
-    return layer
 
 
 class TransformerEncoderBase(FairseqEncoder):
@@ -136,7 +106,7 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layer_norm = None
 
     def build_encoder_layer(self, cfg, is_moe_layer=False):
-        layer = transformer_layer.TransformerEncoderLayerBase(
+        layer = TransformerEncoderLayer(
             cfg, return_fc=self.return_fc, is_moe_layer=is_moe_layer
         )
         checkpoint = cfg.checkpoint_activations
@@ -258,8 +228,13 @@ class TransformerEncoderBase(FairseqEncoder):
         # encoder layers
         l_aux = []
         for layer in self.layers:
+            passed_src_tokens = (
+                src_tokens if self.cfg.pass_tokens_transformer_layer else None
+            )
             lr, l_aux_i = layer(
-                x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                x,
+                encoder_padding_mask=encoder_padding_mask if has_pads else None,
+                tokens=passed_src_tokens,
             )
 
             if isinstance(lr, tuple) and len(lr) == 2:
