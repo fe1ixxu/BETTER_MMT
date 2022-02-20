@@ -11,6 +11,7 @@ import argparse
 import logging
 import math
 import os
+import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -281,11 +282,12 @@ def train(
         if epoch_itr.epoch <= len(cfg.optimization.update_freq)
         else cfg.optimization.update_freq[-1]
     )
-    itr = iterators.GroupedIterator(
-        itr,
-        update_freq,
-        skip_remainder_batch=cfg.optimization.skip_remainder_batch,
-    )
+    if update_freq > 1:
+        itr = iterators.GroupedIterator(
+            itr,
+            update_freq,
+            skip_remainder_batch=not cfg.optimization.train_with_epoch_remainder_batch,
+        )
     if cfg.common.tpu:
         itr = utils.tpu_data_loader(itr)
     progress = progress_bar.progress_bar(
@@ -331,6 +333,8 @@ def train(
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
+            if update_freq == 1:
+                samples = [samples]
             log_output = trainer.train_step(samples)
 
         if log_output is not None:  # not OOM, overflow, ...
@@ -459,16 +463,43 @@ def validate_and_save(
 
 def post_checkpoint_callback(cfg, filename):
     if cfg.checkpoint.s3_upload_path is not None:
-        try:
-            # PathManager only supports writing to S3, but this function call
-            # can be replaced with other APIs for copying checkpoints.
-            PathManager.copy_from_local(
-                filename,
-                os.path.join(cfg.checkpoint.s3_upload_path, os.path.basename(filename)),
-                overwrite=True,
+        if "blob.core.windows.net" in cfg.checkpoint.s3_upload_path:
+            azcopy_logs = filename + "_azcopy_logs"
+            os.environ["AZCOPY_CONCURRENCY_VALUE"] = "10"
+            os.environ["AZCOPY_LOG_LOCATION"] = azcopy_logs
+            os.makedirs(azcopy_logs, exist_ok=True)
+            logger.info(
+                f"preparing to azcopy {filename} to {cfg.checkpoint.s3_upload_path}; logs in {azcopy_logs}"
             )
-        except (FileNotFoundError, AssertionError) as e:
-            logger.info(f"could not upload {filename}: {e}")
+            cmd = [
+                "/shared/home/myleott/bin/azcopy",
+                "copy",
+                "--cap-mbps",
+                "96.0",
+                filename,
+                cfg.checkpoint.s3_upload_path,
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode != 0:
+                print("Error: {}, azcopy failed".format(res.returncode))
+                print("Azcopy stdout = {}".format(res.stdout))
+                sys.exit(1)
+            # Delete original checkpoint on local storage
+            # TODO make this configurable
+            os.remove(filename)
+        else:
+            try:
+                # PathManager only supports writing to S3, but this function call
+                # can be replaced with other APIs for copying checkpoints.
+                PathManager.copy_from_local(
+                    filename,
+                    os.path.join(
+                        cfg.checkpoint.s3_upload_path, os.path.basename(filename)
+                    ),
+                    overwrite=True,
+                )
+            except (FileNotFoundError, AssertionError) as e:
+                logger.info(f"could not upload {filename}: {e}")
 
 
 def get_training_stats(stats: Dict[str, Any]) -> Dict[str, Any]:

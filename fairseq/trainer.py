@@ -389,6 +389,18 @@ class Trainer(object):
     def is_fsdp(self):
         return self.cfg.distributed_training.ddp_backend == "fully_sharded"
 
+    @property
+    def is_moe(self):
+        return getattr(self.cfg.model, "moe_freq", 0) > 0
+
+    @property
+    def is_base_moe(self) -> bool:
+        return getattr(self.cfg.model, "base_layers", 0) > 0
+
+    @property
+    def use_sharded_state(self):
+        return self.cfg.distributed_training.use_sharded_state
+
     def consolidate_optimizer(self):
         """For OSS, we need to consolidate the state dict."""
         if self.cfg.checkpoint.no_save_optimizer_state:
@@ -400,64 +412,10 @@ class Trainer(object):
             st = self.model.gather_full_optim_state_dict(
                 self.optimizer
             )  # only returns on rank 0
+            if st is None:
+                st = -1  # sentinel so that workers do not save optimizer.state_dict()
             self._gathered_optim_state = st
-
-    # def state_dict(self):
-    #     state_dict = {
-    #         "args": None,  # legacy
-    #         "cfg": (
-    #             OmegaConf.to_container(self.cfg, resolve=True, enum_to_str=True)
-    #             if OmegaConf.is_config(self.cfg)
-    #             else self.cfg
-    #         ),
-    #         "model": self.model.state_dict(),
-    #         "criterion": (
-    #             self.criterion.state_dict()
-    #             if utils.has_parameters(self.criterion)
-    #             else None
-    #         ),
-    #         "optimizer_history": (self._optim_history or [])
-    #         + [
-    #             {
-    #                 "criterion_name": self.get_criterion().__class__.__name__,
-    #                 "optimizer_name": self.optimizer.__class__.__name__,
-    #                 "lr_scheduler_state": self.lr_scheduler.state_dict(),
-    #                 "num_updates": self.get_num_updates(),
-    #             }
-    #         ],
-    #         "task_state": self.task.state_dict() if self.task is not None else {},
-    #         "extra_state": {
-    #             "metrics": metrics.state_dict(),
-    #             "previous_training_time": self.cumulative_training_time(),
-    #         },
-    #     }
-    #     if self.cfg.ema.store_ema:
-    #         # Save EMA model state as extra state
-    #         state_dict["extra_state"]["ema"] = self.ema.get_model().state_dict()
-    #         if self.cfg.ema.ema_fp32:
-    #             # Save EMA params in fp32
-    #             state_dict["extra_state"]["ema_fp32_params"] = self.ema.fp32_params
-    #     if not self.cfg.checkpoint.no_save_optimizer_state:
-    #         if self._gathered_optim_state is not None:
-    #             state_dict["last_optimizer_state"] = self._gathered_optim_state
-    #             self._gathered_optim_state = None
-    #         else:
-    #             state_dict["last_optimizer_state"] = self.optimizer.state_dict()
-    #     if self.is_fsdp:
-    #         # save meta data for recombining checkpoint upon loading
-    #         state_dict["fsdp_metadata"] = self.model.local_metadata_dict()
-    #     return state_dict
-
-    @property
-    def is_moe(self):
-        return getattr(self.cfg.model, "moe_freq", 0) > 0
-
-    @property
-    def is_base_moe(self) -> bool:
-        return getattr(self.cfg.model, "base_layers", 0) > 0
-
-    def use_sharded_state(self):
-        return self.cfg.distributed_training.use_sharded_state
+            assert self._gathered_optim_state is not None
 
     def state_dict(self, filename, training_finished=False) -> Dict[str, Dict]:
         if self.is_moe or self.is_base_moe:
@@ -476,7 +434,11 @@ class Trainer(object):
                 )
             ]
             if self.is_data_parallel_master:
-                if self.is_fsdp and not self.use_sharded_state:
+                if (
+                    self.is_fsdp
+                    and not self.use_sharded_state
+                    and not self.cfg.checkpoint.no_save_optimizer_state
+                ):
                     assert self._gathered_optim_state is not None
                     if "loss_scale" in expert_model_state_dict:
                         self._gathered_optim_state[
@@ -575,8 +537,6 @@ class Trainer(object):
         self, filename, extra_state, training_finished=False, async_callback_fn=None
     ):
         """Save all training state in a checkpoint file."""
-
-        # logger.info(f"Saving checkpoint to {os.path.abspath(filename)}")
         # call state_dict on all ranks in case it needs internal communication
         state_dicts = self.state_dict(filename, training_finished)
         for filename, state_dict in state_dicts.items():
@@ -713,29 +673,6 @@ class Trainer(object):
                         )
                         layer.self_attn._set_skip_embed_dim_check()
                     logger.info(self.model)
-                # this is the code related to AdaPrune
-                # In short, it removes redundant units in feedforward layer in each transformer layer based on importance
-                # For more info, please refer to the paper: https://openreview.net/forum?id=_CMSV7FTzGI
-                # The idea of prune in ffn can be summarized as
-                # Fine tune model (e.g. roberta encoder) on a certain datasets with regularization
-                # After the model is trained. User could use _get_fc_rank and _prune_fc_layer functions to get the top X units with most importance.
-                # Then user uses the rank to prune a new roberta encoder and save the pruned ckpt manually.
-                # User will fine tune the the new roberta encoder via the ckpt saved above
-                # To get rid of registering different pruned version of Roberta, I use the argument --ffn-blocks-to-remove to prune the Roberta model into a pruned version which matches the pruned ckpt.
-                if (
-                    safe_hasattr(self.model, "args")
-                    and safe_hasattr(self.model.args, "ffn_blocks_to_remove")
-                    and self.model.args.ffn_blocks_to_remove != -1
-                ):
-                    logger.info(
-                        f"Prune model: remove {self.model.args.ffn_blocks_to_remove} ffn blocks for each transformer layer"
-                    )
-                    for layer in self.model.encoder.sentence_encoder.layers:
-                        remove_index = layer._get_fc_rank(
-                            remove_num=self.model.args.ffn_blocks_to_remove
-                        )
-                        layer._prune_fc_layer(remove_index=remove_index)
-                    logger.info(self.model)
 
                 self.model.load_state_dict(
                     state["model"], strict=True, model_cfg=self.cfg.model
@@ -784,7 +721,6 @@ class Trainer(object):
                 )
 
             self.optimizer.load_state_dict(last_optim_state, optimizer_overrides)
-
             logger.info(f"Loaded optim_state for {filename}")
             self.set_num_updates(last_optim["num_updates"])
 
@@ -886,7 +822,9 @@ class Trainer(object):
             epoch=epoch,
             data_buffer_size=self.cfg.dataset.data_buffer_size,
             disable_iterator_cache=disable_iterator_cache,
-            skip_remainder_batch=self.cfg.optimization.skip_remainder_batch,
+            skip_remainder_batch=(
+                not self.cfg.optimization.train_with_epoch_remainder_batch
+            ),
             grouped_shuffling=self.cfg.dataset.grouped_shuffling,
             update_epoch_batch_itr=self.cfg.dataset.update_epoch_batch_itr,
         )

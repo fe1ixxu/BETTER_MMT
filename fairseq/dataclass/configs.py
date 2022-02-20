@@ -244,6 +244,36 @@ class CommonConfig(FairseqDataclass):
     log_nvidia_smi: bool = field(
         default=False, metadata={"help": "log output from nvidia-smi during training"}
     )
+    use_tutel_moe: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Use MSFT Tutel if it's available for faster MoE impl"},
+    )
+
+
+@dataclass
+class ReshardConfig(FairseqDataclass):
+    save_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "where to save the resharded checkpoints",
+            "argparse_alias": "--dest-dir",
+        },
+    )
+    save_prefix: Optional[str] = field(
+        default="reshard", metadata={"help": "save to dest-dir/save-prefix-shard{i}.pt"}
+    )
+    target_world_size: Optional[int] = field(
+        default=128,
+        metadata={
+            "help": "The maximum number of GPUs you want to use to evaluate. AssertionError if any FSDP module's number of parameters is not divisible by this."
+        },
+    )
+    do_pad: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Add padding to make sure that running on target world size works. This reduces flexibility for world sizes smaller than target world size."
+        },
+    )
 
 
 @dataclass
@@ -452,6 +482,12 @@ class DistributedTrainingConfig(FairseqDataclass):
         default=False,
         metadata={"help": "not flatten parameter param for fsdp"},
     )
+    freeze_up_to_layer: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Freeze all layers up to the layer number specified (1 indexed)"
+        },
+    )
 
 
 @dataclass
@@ -629,7 +665,7 @@ class OptimizationConfig(FairseqDataclass):
             "help": "specify global optimizer for syncing models on different GPUs/shards"
         },
     )
-    skip_remainder_batch: Optional[bool] = field(
+    train_with_epoch_remainder_batch: Optional[bool] = field(
         default=False,
         metadata={
             "help": "if set, include the last (partial) batch of each epoch in training"
@@ -661,6 +697,10 @@ class CheckpointConfig(FairseqDataclass):
         metadata={
             "help": "finetune from a pretrained model; note that meters and lr scheduler will be reset"
         },
+    )
+    ignore_suffix: Optional[bool] = field(
+        default=False,
+        metadata={"help": "ignore suffix when first loading. Messes up requeue."},
     )
     reset_dataloader: bool = field(
         default=False,
@@ -1057,6 +1097,12 @@ class CommonEvalConfig(FairseqDataclass):
         default=False,
         metadata={
             "help": "if set, use distributed init for MoE generation or evaluation"
+        },
+    )
+    moe_generation: bool = field(
+        default=False,
+        metadata={
+            "help": "if set, same batch on all GPUs (regardless of is_moe value)"
         },
     )
 

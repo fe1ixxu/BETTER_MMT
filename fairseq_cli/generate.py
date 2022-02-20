@@ -41,9 +41,12 @@ def main(cfg: DictConfig):
 
     if cfg.common_eval.results_path is not None:
         os.makedirs(cfg.common_eval.results_path, exist_ok=True)
+        rank_suffix = ""
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() > 0:
+            rank_suffix = "-other_ranks"
         output_path = os.path.join(
             cfg.common_eval.results_path,
-            "generate-{}.txt".format(cfg.dataset.gen_subset),
+            "generate-{}{}.txt".format(cfg.dataset.gen_subset, rank_suffix),
         )
         with open(output_path, "w", buffering=1, encoding="utf-8") as h:
             return _main(cfg, h)
@@ -152,7 +155,7 @@ def _main(cfg: DictConfig, output_file):
     num_shards = cfg.distributed_training.distributed_world_size
     shard_id = cfg.distributed_training.distributed_rank
     # We need all GPUs to process the same batch
-    if cfg.common_eval.is_moe:
+    if cfg.common_eval.is_moe or cfg.common_eval.moe_generation:
         num_shards = 1
         shard_id = 0
     itr = task.get_batch_iterator(
@@ -222,6 +225,8 @@ def _main(cfg: DictConfig, output_file):
             prefix_tokens=prefix_tokens,
             constraints=constraints,
         )
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
         num_generated_tokens = sum(len(h[0]["tokens"]) for h in hypos)
         gen_timer.stop(num_generated_tokens)
 
