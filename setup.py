@@ -218,10 +218,15 @@ def do_setup(package_data):
             'numpy; python_version>="3.7"',
             "regex",
             "sacrebleu>=1.4.12",
+            "sentencepiece",
             "torch",
             "tqdm",
+            "typing_extensions",
             "bitarray",
             "torchaudio>=0.8.0",
+            "boto3",
+            "scikit-learn==0.24.1",
+            "scipy==1.6.1",
         ],
         dependency_links=dependency_links,
         packages=find_packages(
@@ -235,6 +240,19 @@ def do_setup(package_data):
             ]
         )
         + extra_packages,
+        extras_require={
+            "dev": [
+                # NOTE: The version here should match the version in .pre-commit-config.yaml
+                "flake8==3.9.2",
+                "pre-commit",
+                # test deps
+                "iopath",
+                "transformers",
+                "pyarrow",
+                "fairscale",
+                "sklearn",
+            ]
+        },
         package_data=package_data,
         ext_modules=extensions,
         test_suite="tests",

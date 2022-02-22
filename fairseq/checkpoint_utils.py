@@ -34,6 +34,7 @@ from fairseq.distributed import utils as dist_utils
 from fairseq.distributed.fully_sharded_data_parallel import FSDP, has_FSDP
 from fairseq.file_io import PathManager, torch_load_cpu
 from fairseq.models import FairseqDecoder, FairseqEncoder
+from fairseq.utils import safe_getattr
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,6 @@ def save_checkpoint(
     trainer.consolidate_optimizer()  # TODO(SS): do we need this if no_save_optimizer_state
 
     if not trainer.should_save_checkpoint_on_current_rank:
-        if trainer.always_call_state_dict_during_save_checkpoint:
-            trainer.state_dict()
         return
 
     write_timer = meters.StopwatchMeter()
@@ -97,7 +96,11 @@ def save_checkpoint(
         )
         and not cfg.no_best_checkpoints
     )
-    if val_loss is not None and cfg.keep_best_checkpoints > 0:
+    if (
+        val_loss is not None
+        and cfg.keep_best_checkpoints > 0
+        and not cfg.no_best_checkpoints
+    ):
         worst_best = getattr(save_checkpoint, "best", None)
         chkpts = checkpoint_paths(
             cfg.save_dir,
@@ -113,7 +116,7 @@ def save_checkpoint(
             rand_sfx = np.random.randint(0, cfg.keep_best_checkpoints)
 
         checkpoint_conds[
-            "checkpoint.best_{}_{:.3f}{}{}.pt".format(
+            "checkpoint.best_{}_{:.2f}{}{}.pt".format(
                 cfg.best_checkpoint_metric, val_loss, rand_sfx, suffix
             )
         ] = worst_best is None or is_better(val_loss, worst_best)
@@ -136,16 +139,12 @@ def save_checkpoint(
             if PathManager.islink(shared):
                 PathManager.rm(shared)
 
-        logger.info(f"Preparing to save checkpoint for epoch {checkpoints[0]} ")
-        if trainer.should_save_checkpoint_on_current_rank:
-            trainer.save_checkpoint(checkpoints[0], extra_state)
-        else:
-            trainer.save_checkpoint(
-                checkpoints[0],
-                extra_state,
-                training_finished=training_finished,
-                async_callback_fn=async_callback_fn,
-            )
+        trainer.save_checkpoint(
+            checkpoints[0],
+            extra_state,
+            training_finished=training_finished,
+            async_callback_fn=async_callback_fn,
+        )
 
         def copy_or_symlink(src, dest):
             if cfg.symlink_best_and_last_checkpoints:
@@ -159,10 +158,9 @@ def save_checkpoint(
 
         for cp in checkpoints[1:]:
             copy_or_symlink(src=checkpoints[0], dest=cp)
-            if (
-                (trainer.is_moe or trainer.is_base_moe)
-                and not trainer.is_fsdp
-                and trainer.is_data_parallel_master
+            if (trainer.is_moe or trainer.is_base_moe) and (
+                trainer.is_data_parallel_master
+                or (trainer.is_fsdp and trainer.use_sharded_state)
             ):
                 copy_or_symlink(
                     src=re.sub("rank-[0-9]+", "shared", checkpoints[0]),
@@ -278,7 +276,11 @@ def load_checkpoint(cfg: CheckpointConfig, trainer, **passthrough_args):
             " or reset_lr_scheduler or reset_meters or reset_dataloader"
         )
 
-    suffix = trainer.checkpoint_suffix
+    suffix = (
+        trainer.checkpoint_suffix
+        if not safe_getattr(cfg, "ignore_suffix", None)
+        else None
+    )
     if (
         cfg.restore_file == "checkpoint_last.pt"
     ):  # default value of restore_file is 'checkpoint_last.pt'

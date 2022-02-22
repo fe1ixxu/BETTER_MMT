@@ -328,6 +328,10 @@ def distributed_main(i, main, cfg: FairseqConfig, kwargs):
     cfg.distributed_training.device_id = i
     if torch.cuda.is_available() and not cfg.common.cpu and not cfg.common.tpu:
         torch.cuda.set_device(cfg.distributed_training.device_id)
+        # This is temporary way of making microsoft Tutel happy, as it reads the local rank from
+        # the env. To make it work in cleaner way, we might need to change their interfaces to be
+        # able to pass local rank.
+        os.environ["LOCAL_RANK"] = str(cfg.distributed_training.device_id)
     if cfg.distributed_training.distributed_rank is None:  # torch.multiprocessing.spawn
         cfg.distributed_training.distributed_rank = kwargs.pop("start_rank", 0) + i
 

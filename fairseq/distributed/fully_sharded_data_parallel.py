@@ -17,6 +17,7 @@ from fairseq.file_io import load_and_pop_last_optimizer_state
 
 try:
     from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+    from fairscale.utils.testing import DummyProcessGroup
 
     has_FSDP = True
 except ImportError:
@@ -47,15 +48,6 @@ class FullyShardedDataParallel(FSDP):
                 "Cannot find FullyShardedDataParallel. "
                 "Please install fairscale with: pip install fairscale"
             )
-        if is_moe is None:
-            if torch.distributed.get_rank() == 0:
-                from fairseq import pdb
-
-                pdb.set_trace()
-            else:
-                import time
-
-                time.sleep(1000)
         assert is_moe is not None
         super().__init__(*args, **kwargs)
         self.is_moe = is_moe
@@ -94,9 +86,10 @@ class FullyShardedDataParallel(FSDP):
         elif self.is_moe:
             return super().load_state_dict(state_dict, strict=strict)
         else:
-            state_dict = dist_utils.broadcast_object(
-                state_dict, src_rank=0, group=self.process_group
-            )
+            if not isinstance(self.process_group, DummyProcessGroup):
+                state_dict = dist_utils.broadcast_object(
+                    state_dict, src_rank=0, group=self.process_group
+                )
             return super().load_state_dict(state_dict, strict=strict)
 
 
@@ -113,7 +106,6 @@ def fsdp_enable_wrap(cfg: DistributedTrainingConfig, **kwargs):
         assert cfg.fp16  # memory_efficient_fp16 should imply fp16
     group = dist_utils.get_data_parallel_group()
     if group is None and cfg.distributed_world_size == 1:
-        from fairscale.utils.testing import DummyProcessGroup
 
         group = DummyProcessGroup(rank=0, size=1)
     fsdp_config = {
@@ -122,7 +114,7 @@ def fsdp_enable_wrap(cfg: DistributedTrainingConfig, **kwargs):
         "mixed_precision": cfg.fp16 and not cfg.memory_efficient_fp16,
         "fp32_reduce_scatter": cfg.fp32_reduce_scatter,
         "flatten_parameters": not cfg.not_fsdp_flatten_parameters,
-        "cpu_offload": cfg.cpu_offload,
+        "cpu_offload": cfg.cpu_offload and not cfg.memory_efficient_fp16,
         "compute_dtype": torch.float16 if cfg.fp16 else torch.float32,
         "bucket_cap_mb": cfg.bucket_cap_mb,
         "state_dict_device": torch.device("cpu"),  # reduce GPU mem usage
@@ -145,19 +137,30 @@ def fsdp_wrap(module, min_num_params: Optional[int] = None, **kwargs):
         module (nn.Module): module to (maybe) wrap
         min_num_params (int, Optional): minimum number of layer params to wrap
     """
-    try:
-        from fairscale.nn import wrap
-
-        if min_num_params is not None:
-            num_params = sum(p.numel() for p in module.parameters())
-            if num_params >= min_num_params:
-                return wrap(module, **kwargs)
-            else:
-                return module
-        else:
-            return wrap(module, **kwargs)
-    except ImportError:
+    if not has_FSDP or isinstance(module, FSDP):
         return module
+
+    def wrap(module, **kwargs):
+        try:
+            from fairscale.nn import wrap as fairscale_fsdp_wrap
+
+            # reset child instances on fresh wrap
+            for m in module.modules():
+                if isinstance(m, FSDP):
+                    m._reset_lazy_init()
+
+            return fairscale_fsdp_wrap(module, **kwargs)
+        except ImportError:
+            return module
+
+    if min_num_params is not None:
+        num_params = sum(p.numel() for p in module.parameters())
+        if num_params >= min_num_params:
+            return wrap(module, **kwargs)
+        else:
+            return module
+    else:
+        return wrap(module, **kwargs)
 
 
 def consolidate_fsdp_shards(pth_prefix: str) -> str:

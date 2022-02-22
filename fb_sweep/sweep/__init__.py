@@ -311,7 +311,11 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
     parser.add_argument(
         "--salloc", action="store_true", help="run agaist current allocation"
     )
-    parser.add_argument("--partition", help="partition to run on", default="learnfair")
+    parser.add_argument(
+        "--partition",
+        help="partition to run on",
+        default=default_partition,
+    )
     parser.add_argument("--reservation", help="reservation to run on")
     parser.add_argument(
         "--exclusive", action="store_true", help="if set, get exclusive host"
@@ -355,10 +359,6 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
         "--snapshot-recurse-dirs",
         default="fairseq,fairseq_cli",
         help="comma-separated directories from where to recursively copy *.py, *.so and *.yaml files",
-    )
-    parser.add_argument(
-        "--tensorboard-logdir",
-        help="save tensorboard logs in <tensorboard-logdir>/<prefix>.<save_dir_key>",
     )
     parser.add_argument(
         "--no-tensorboard", action="store_true", help="disable tensorboard logging"

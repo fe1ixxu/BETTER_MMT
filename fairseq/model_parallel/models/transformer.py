@@ -101,7 +101,7 @@ class ModelParallelTransformerDecoder(TransformerDecoder):
     is a :class:`ModelParallelTransformerDecoderLayer`.
     """
 
-    def build_decoder_layer(self, args, no_encoder_attn=False):
+    def build_decoder_layer(self, args, no_encoder_attn=False, is_moe_layer=False):
         return ModelParallelTransformerDecoderLayer(args, no_encoder_attn)
 
     def output_layer(self, features, **kwargs):

@@ -18,7 +18,7 @@ except ImportError:
 unittest.TestLoader.sortTestMethodsUsing = lambda _, x, y: y > x
 
 
-@unittest.skipIf(not boto3, "Requires boto3 install")
+@unittest.skipIf(not boto3 or S3PathHandler is None, "Requires boto3 and S3PathHandler")
 class TestsS3(unittest.TestCase):
     s3_auth = False
     skip_s3_auth_required_tests_message = (

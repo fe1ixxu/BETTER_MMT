@@ -217,7 +217,7 @@ class Trainer(object):
     def use_distributed_wrapper(self) -> bool:
         return (
             self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf
-        ) or (self.is_fsdp and self.cfg.distributed_training.cpu_offload)
+        ) or (self.is_fsdp)
 
     @property
     def should_save_checkpoint_on_current_rank(self) -> bool:
@@ -226,7 +226,7 @@ class Trainer(object):
             getattr(self.cfg.model, "alternate_decoder_ffn_embed_dim", 0) != 0
         )
         if (
-            (self.is_fsdp and self.use_sharded_state)
+            (self.is_fsdp)
             or (self.is_moe and not has_alt_ffn_dim)
             or getattr(self.cfg.model, "base_layers", 0) > 0
         ):
@@ -247,7 +247,7 @@ class Trainer(object):
         """Suffix to add to the checkpoint file name."""
         if (self.is_moe or self.is_base_moe) and not self.use_sharded_state:
             return self.cfg.checkpoint.checkpoint_suffix
-        elif self.is_fsdp and self.use_sharded_state:
+        elif self.is_fsdp:
             return self.cfg.checkpoint.checkpoint_suffix + "-shard{0}".format(
                 self.data_parallel_rank
             )
@@ -581,7 +581,7 @@ class Trainer(object):
                 # on every worker for now
                 or self.tpu
                 # FSDP requires loading checkpoint shards on all ranks
-                or (self.is_fsdp and self.use_sharded_state)
+                or (self.is_fsdp)
                 or getattr(self.cfg.model, "base_layers", 0) > 0
             )
 
