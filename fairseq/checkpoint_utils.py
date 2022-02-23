@@ -617,7 +617,11 @@ def load_model_ensemble_and_task(
                 raise IOError("Model file not found: {}".format(filename))
 
             if state is None:
-                state = load_checkpoint_to_cpu(filename, arg_overrides, is_moe=is_moe)
+                state = load_checkpoint_to_cpu(
+                    filename,
+                    arg_overrides,
+                    is_moe=is_moe,
+                )
             if "args" in state and state["args"] is not None:
                 cfg = convert_namespace_to_omegaconf(state["args"])
             elif "cfg" in state and state["cfg"] is not None:

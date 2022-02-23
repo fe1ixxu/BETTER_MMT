@@ -521,11 +521,7 @@ class Trainer(object):
                 self.cfg.checkpoint.no_save_optimizer_state_on_training_finished
                 and training_finished
             ):
-                if self._gathered_optim_state is not None:
-                    state_dict["last_optimizer_state"] = self._gathered_optim_state
-                    self._gathered_optim_state = None
-                else:
-                    state_dict["last_optimizer_state"] = optimizer_state_dict
+                state_dict["last_optimizer_state"] = optimizer_state_dict
 
             if self.is_fsdp and self.use_sharded_state:
                 # save meta data for recombining checkpoint upon loading
