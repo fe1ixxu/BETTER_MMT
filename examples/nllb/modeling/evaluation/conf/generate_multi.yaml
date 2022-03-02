@@ -1,0 +1,21 @@
+defaults:
+  - cluster: fair
+  - langs: v3
+  - launcher: submitit
+
+model_folder: ???
+model_type: dense
+direction: en_to_many
+checkpoints:
+  - checkpoint_last
+eval_on: sampled
+gen_splits:
+  - valid
+#  - test
+data: ${cluster.data_dir}/${langs.bin_root}/data_bin/shard000
+spm_model: ${cluster.data_dir}/${langs.bin_root}/vocab_bin/sentencepiece.source.256000.model
+encoder_langtok: tgt
+output_dir: ${model_folder}
+beam_size: 4
+fp16: true
+fairseq_root: .
