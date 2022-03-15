@@ -37,15 +37,19 @@ install_dep_fused_ops: &install_dep_fused_ops
       working_directory: ~/
       command: |
         source activate fairseq
-        git clone https://github.com/NVIDIA/apex
-        cd apex
-        git checkout e2083df5eb96643c61613b9df48dd4eea6b07690
-        pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" --global-option="--deprecated_fused_adam" --global-option="--xentropy" --global-option="--fast_multihead_attn" ./
-        cd ~/
-        git clone --depth=1 --branch v2.4 https://github.com/NVIDIA/Megatron-LM.git
-        cd Megatron-LM
-        pip install -e .
-
+        if [ ! -d "apex" ]; then
+          git clone https://github.com/NVIDIA/apex
+          cd apex
+          git checkout e2083df5eb96643c61613b9df48dd4eea6b07690
+          pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" --global-option="--deprecated_fused_adam" --global-option="--xentropy" --global-option="--fast_multihead_attn" ./
+          cd ~/
+        fi
+        if [ ! -d "Megatron-LM" ]; then
+          git clone --depth=1 --branch v2.4 https://github.com/NVIDIA/Megatron-LM.git
+          cd Megatron-LM
+          pip install -e .
+          cd ~/
+        fi
 
 install_dep_pt19: &install_dep_pt19
   - run:
@@ -70,7 +74,7 @@ install_repo: &install_repo
       name: Install Repository
       command: |
         source activate fairseq
-        pip install .
+        pip install -e .
         python setup.py build_ext --inplace
 
 run_unittests: &run_unittests

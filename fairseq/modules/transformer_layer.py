@@ -12,7 +12,6 @@ from torch import Tensor
 
 from fairseq import distributed_utils as dist_utils
 from fairseq import utils
-from fairseq.models.transformer import TransformerConfig
 from fairseq.modules import LayerNorm, MultiheadAttention, gelu
 from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.fused_bias_gelu import (
@@ -404,6 +403,8 @@ class TransformerEncoderLayerBase(nn.Module):
 # backward compatible with the legacy argparse format
 class TransformerEncoderLayer(TransformerEncoderLayerBase):
     def __init__(self, args, return_fc=False, is_moe_layer=False):
+        from fairseq.models.transformer import TransformerConfig
+
         super().__init__(
             TransformerConfig.from_namespace(args),
             return_fc=return_fc,
@@ -412,6 +413,8 @@ class TransformerEncoderLayer(TransformerEncoderLayerBase):
         self.args = args
 
     def build_self_attention(self, embed_dim, args):
+        from fairseq.models.transformer import TransformerConfig
+
         return super().build_self_attention(
             embed_dim, TransformerConfig.from_namespace(args)
         )
@@ -845,6 +848,8 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
         add_zero_attn=False,
         is_moe_layer=False,
     ):
+        from fairseq.models.transformer import TransformerConfig
+
         super().__init__(
             TransformerConfig.from_namespace(args),
             no_encoder_attn=no_encoder_attn,
@@ -857,6 +862,8 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
     def build_self_attention(
         self, embed_dim, args, add_bias_kv=False, add_zero_attn=False
     ):
+        from fairseq.models.transformer import TransformerConfig
+
         return super().build_self_attention(
             embed_dim,
             TransformerConfig.from_namespace(args),
@@ -865,6 +872,8 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
         )
 
     def build_encoder_attention(self, embed_dim, args):
+        from fairseq.models.transformer import TransformerConfig
+
         return super().build_encoder_attention(
             embed_dim,
             TransformerConfig.from_namespace(args),

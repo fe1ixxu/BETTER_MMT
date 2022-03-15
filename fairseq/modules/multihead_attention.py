@@ -560,7 +560,7 @@ class MultiheadAttention(nn.Module):
 
         if before_softmax:
             return attn_weights, v
-        if not self.use_fused_softmax:
+        if not self.use_fused_softmax or torch.jit.is_scripting():
             attn_weights_float = utils.softmax(
                 attn_weights, dim=-1, onnx_trace=self.onnx_trace
             )
