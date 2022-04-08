@@ -1,0 +1,29 @@
+bin_root: flores125.en_xx_en.v3.1
+
+sampled:
+  - zul
+
+all:
+  - asm
+  - azj
+  - ben
+  - eng
+  - est
+  - hye
+  - ibo
+  - ind
+  - isl
+  - jav
+  - lit
+  - lug
+  - mal
+  - mon
+  - sqi
+  - srp
+  - tel
+  - tgl
+  - tha
+  - vie
+  - xho
+  - zho_Hans
+  - zul

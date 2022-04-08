@@ -14,7 +14,7 @@ from random import randint
 import hydra
 from omegaconf import MISSING, DictConfig
 
-from examples.nllb.mining.nllb_lib.nllb_module import (
+from examples.nllb.nllb_lib.nllb_module import (
     DistributedRequirements,
     NLLBModule,
 )
@@ -150,7 +150,7 @@ class GenerateMultiModule(NLLBModule):
 
         out_dir = os.path.join(
             self.config.output_dir,
-            f"gen_output{cap}",
+            f"gen_output_{cap}",
             f"{src}-{tgt}_{job_config.checkpoint}_{job_config.gen_split}",
         )
         os.makedirs(out_dir, exist_ok=True)
@@ -181,6 +181,9 @@ class GenerateMultiModule(NLLBModule):
         if self.config.get("debug", False):
             print(generate_command)
         else:
+            generate_command_file = os.path.join(out_dir, "gen.sh")
+            with open(generate_command_file, "w") as f:
+                f.write(generate_command)
             subprocess.run(
                 generate_command,
                 shell=True,

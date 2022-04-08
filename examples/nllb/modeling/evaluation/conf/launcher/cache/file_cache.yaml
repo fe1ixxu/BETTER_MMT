@@ -1,0 +1,2 @@
+_target_: examples.nllb.nllb_lib.FileCache
+caching_dir: /tmp/evaluation_cache/

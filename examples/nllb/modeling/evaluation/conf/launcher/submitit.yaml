@@ -1,0 +1,7 @@
+defaults:
+  - cache: file_cache
+
+_target_: examples.nllb.nllb_lib.SubmititLauncher
+log_folder: executor_logs
+cluster: slurm
+partition: devaccel

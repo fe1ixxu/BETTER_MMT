@@ -1,0 +1,7 @@
+# @package launcher
+
+defaults:
+  - cache: file_cache
+  - lang: luo
+  
+_target_: examples.nllb.nllb_lib.LocalLauncher

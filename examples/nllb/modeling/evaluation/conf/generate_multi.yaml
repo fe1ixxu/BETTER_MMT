@@ -2,6 +2,7 @@ defaults:
   - cluster: fair
   - langs: v3
   - launcher: submitit
+  - _self_
 
 model_folder: ???
 model_type: dense
