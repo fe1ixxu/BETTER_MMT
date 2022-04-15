@@ -1,0 +1,5 @@
+cluster_name: rsc
+data_dir: /checkpoint/nllb/data
+partition: learn
+memory_multiplier: 50
+timeout_min: 1000

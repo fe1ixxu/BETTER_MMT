@@ -1,0 +1,5 @@
+cluster_name: fair
+data_dir: /large_experiments/nllb/mmt/multilingual_bin
+partition: learnaccel
+memory_multiplier: 50
+timeout_min: 1000

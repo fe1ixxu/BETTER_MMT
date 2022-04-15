@@ -366,7 +366,8 @@ def get_grid(args):
                 hyperparam("--moe-freq", [args.moe_freq]),
                 hyperparam("--use-moe-pad-mask"),
                 hyperparam("--moe-normalize-expert-grad", ["sqrt_world_size"]),
-                hyperparam("--use-tutel-moe"),
+                # gradient explosion issues encountered with Tutel MoE
+                # hyperparam("--use-tutel-moe"),
             ]
         )
         if args.moe_eval_cap > 0.25:
