@@ -14,10 +14,7 @@ from random import randint
 import hydra
 from omegaconf import MISSING, DictConfig
 
-from examples.nllb.nllb_lib.nllb_module import (
-    DistributedRequirements,
-    NLLBModule,
-)
+from examples.nllb.nllb_lib.nllb_module import DistributedRequirements, NLLBModule
 
 
 @dataclass
@@ -205,10 +202,20 @@ class GenerateMultiModule(NLLBModule):
                 self.config.cluster.flores_path, flores_split, f"{tgt}.{flores_split}"
             )
 
+            # Install `pip install git+https://github.com/mjpost/sacrebleu.git@master`
+            # spm BLEU Eval
             subprocess.run(
                 f'lang="{job_config.lang}" SACREBLEU_FORMAT=text '
                 f"sacrebleu -tok spm {ref_file} < {out_dir}/gen_best.output "
                 f" > {out_dir}/bleu.results",
+                shell=True,
+                check=True,
+            )
+
+            # chrf++ Eval
+            subprocess.run(
+                f"sacrebleu -m chrf --chrf-word-order 2 -tok spm {ref_file} < {out_dir}/gen_best.output "
+                f" > {out_dir}/chrf.results",
                 shell=True,
                 check=True,
             )

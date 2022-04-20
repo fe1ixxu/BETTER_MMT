@@ -4,7 +4,9 @@ defaults:
   - launcher: submitit
   - _self_
 
+fairseq_root: ???
 model_folder: ???
+
 model_type: dense
 direction: en_to_many
 checkpoints:
@@ -19,4 +21,3 @@ encoder_langtok: tgt
 output_dir: ${model_folder}
 beam_size: 4
 fp16: true
-fairseq_root: .
