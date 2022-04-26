@@ -208,6 +208,13 @@ def add_extra_options_func(parser):
     parser.add_argument("--adapter-hidden-dim", type=int, default=None)
     parser.add_argument("--moe-base-model", action="store_true")
 
+    # Moe:
+    parser.add_argument( 
+        "--moe-expert-count", 
+        type=int, 
+        default=None, 
+        help="Number of experts per MoE layer",
+    ) 
 
 def get_grid(args):
     task = args.task
@@ -361,7 +368,7 @@ def get_grid(args):
                 #     args.decoder_moe_freq,
                 #     save_dir_key=lambda val: f"dmq{val}",
                 # ),
-                hyperparam("--moe-expert-count", args.num_nodes * args.num_gpus),
+                hyperparam("--moe-expert-count", args.moe_expert_count or (args.num_nodes * args.num_gpus)),
                 hyperparam("--moe-eval-capacity-token-fraction", args.moe_eval_cap),
                 hyperparam("--moe-freq", [args.moe_freq]),
                 hyperparam("--use-moe-pad-mask"),
@@ -370,6 +377,8 @@ def get_grid(args):
                 # hyperparam("--use-tutel-moe"),
             ]
         )
+        # if args.moe_expert_count is not None and args.moe_expert_count < (args.num_nodes * args.num_gpus):
+            # grids.append(hyperparam("--no-save-optimizer-state"))
         if args.moe_eval_cap > 0.25:
             grids.append(hyperparam("--max-tokens-valid", 1024))
 

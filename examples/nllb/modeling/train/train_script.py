@@ -134,6 +134,11 @@ class TrainModule(NLLBModule):
         )
         zero2_param = "--zero2" if cfg.zero2 else ""
 
+        print('MoE params ', cfg.model_type.moe_param)
+        if cfg.model_type.moe_param:
+            moe_params = cfg.model_type.moe_param + f" --moe-expert-count {cfg.model_type.expert_count}"
+        else:
+            moe_params = ""
         sweep_command = f"""
             cd {cfg.fairseq_root}
             python -m {cfg.module_name} \
@@ -162,7 +167,7 @@ class TrainModule(NLLBModule):
                 --lr {cfg.lr} \
                 --opt adam16bit \
                 --share-all-embeddings \
-                --save-interval-updates 5000 \
+                --save-interval-updates 20000 \
                 --tensorboard-logdir {tensorboard_dir} \
                 --arch {cfg.arch} \
                 --dropout {cfg.dropout} \
@@ -171,7 +176,8 @@ class TrainModule(NLLBModule):
                 --snapshot-code \
                 --use-local-shard-size \
                 {checkpoint_activations_param} \
-                {zero2_param}
+                {zero2_param} \
+                {moe_params}
         """
 
         print("RUNNING SWEEP COMMAND:")
