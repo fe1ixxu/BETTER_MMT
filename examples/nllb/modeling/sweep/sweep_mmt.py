@@ -302,10 +302,10 @@ def get_grid(args):
                     binary_flag=True,
                     save_dir_key=lambda val: "shareemb",
                 ),
-                hyperparam(
-                    "--pass-tokens-transformer-layer",
-                    binary_flag=True,
-                ),
+                # hyperparam(
+                #     "--pass-tokens-transformer-layer",
+                #     binary_flag=True,
+                # ),
                 hyperparam("--decoder-normalize-before"),
                 hyperparam("--encoder-normalize-before"),
             ]
