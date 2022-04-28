@@ -86,6 +86,7 @@ def add_extra_options_func(parser):
     )
     parser.add_argument("--arch", default="transformer")
     parser.add_argument("--task", default="translation_multi_simple_epoch")
+    parser.add_argument("--best-checkpoint-metric", default="loss")
     parser.add_argument(
         "--use-local-shard-size",
         default=False,
@@ -268,6 +269,10 @@ def get_grid(args):
             else "moe_label_smoothed_cross_entropy",
         ),
         hyperparam("--label-smoothing", 0.1),
+        hyperparam("--best-checkpoint-metric", 
+                    args.best_checkpoint_metric,
+                    # save_dir_key=lambda val: f"ckp_best_{val}"
+                   ),
         hyperparam(
             "--max-tokens", args.max_tokens, save_dir_key=lambda val: f"maxtok{val}"
         ),
@@ -377,8 +382,9 @@ def get_grid(args):
                 # hyperparam("--use-tutel-moe"),
             ]
         )
-        # if args.moe_expert_count is not None and args.moe_expert_count < (args.num_nodes * args.num_gpus):
-            # grids.append(hyperparam("--no-save-optimizer-state"))
+        if args.moe_expert_count is not None and args.moe_expert_count < (args.num_nodes * args.num_gpus):
+            grids.append(hyperparam("--use-sharded-state"))
+
         if args.moe_eval_cap > 0.25:
             grids.append(hyperparam("--max-tokens-valid", 1024))
 

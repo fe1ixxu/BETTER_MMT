@@ -12,6 +12,8 @@ seed: 2
 arch: transformer_24_24
 max_updates: 100000
 validate_interval_updates: 10000
+save_interval_updates: 5000
+best_checkpoint_metric: "ppl"
 encoder_langtok: src
 ddp_backend: fully_sharded
 fp16: true

@@ -12,6 +12,8 @@ seed: 2
 arch: "transformer_24_24"
 max_updates: 100000
 validate_interval_updates: 20000
+save_interval_updates: 20000
+best_checkpoint_metric: "loss"
 encoder_langtok: "tgt"
 ddp_backend: "fully_sharded"
 fp16: true

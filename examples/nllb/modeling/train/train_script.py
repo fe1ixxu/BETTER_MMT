@@ -57,6 +57,8 @@ class TrainConfig:
     arch: str = MISSING
     max_updates: int = MISSING
     validate_interval_updates: int = MISSING
+    save_interval_updates: int = MISSING
+    best_checkpoint_metric: str = MISSING
     encoder_langtok: str = MISSING
     ddp_backend: str = MISSING
     fp16: bool = MISSING
@@ -167,11 +169,12 @@ class TrainModule(NLLBModule):
                 --lr {cfg.lr} \
                 --opt adam16bit \
                 --share-all-embeddings \
-                --save-interval-updates 20000 \
+                --save-interval-updates {cfg.save_interval_updates} \
                 --tensorboard-logdir {tensorboard_dir} \
                 --arch {cfg.arch} \
                 --dropout {cfg.dropout} \
                 --validate-interval-updates {cfg.validate_interval_updates} \
+                --best-checkpoint-metric {cfg.best_checkpoint_metric} \
                 --seed {cfg.seed} \
                 --snapshot-code \
                 --use-local-shard-size \
