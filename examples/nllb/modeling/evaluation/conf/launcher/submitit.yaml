@@ -1,5 +1,5 @@
 defaults:
-  - cache: file_cache
+  - cache: no_cache
 
 _target_: examples.nllb.nllb_lib.SubmititLauncher
 log_folder: executor_logs

@@ -2,6 +2,6 @@ name: fair
 data_dir: /large_experiments/nllb/mmt/multilingual_bin
 partition: learnaccel
 constraint: volta32gb
-flores_path: /large_experiments/nllb/mmt/flores101
+flores_path: /large_experiments/nllb/mmt/flores200
 memory_multiplier: 50
 timeout_min: 1000
