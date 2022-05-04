@@ -56,7 +56,7 @@ def get_averages(scores_map, threshold=50):
     averages = [avg_en_xx, avg_xx_en, avg_non_eng, avg_all_pairs]
     for idx, agg in enumerate(averages):
         lst = lists[idx]
-        for resource in ['all', 'high', 'mid', 'low', 'v.low']:
+        for resource in ['all', 'high', 'mid', 'low', 'v_low']:
             agg[resource] = round(sum(lst[resource])/max(len(lst[resource]), 1), 2)
     return {'en-xx': avg_en_xx, 'xx-en': avg_xx_en, 'non-eng': avg_non_eng, 'all': avg_all_pairs}
 
