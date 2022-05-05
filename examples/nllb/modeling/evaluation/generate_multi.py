@@ -154,12 +154,13 @@ class GenerateMultiModule(NLLBModule):
                         "world_size": world_size,
                         "moe_eval_capacity_token_fraction": cap,
                         "use_moe_pad_mask": False,
+                        "pass_tokens_transformer_layer": False,
                     }
                     moe_params = (
-                        "--is-moe"
-                        f"--distributed-world-size {world_size}"
-                        f"--distributed-port {port}"
-                        f"--model-overrides {repr(model_overrides)}"
+                        "--is-moe "
+                        f"--distributed-world-size {world_size} "
+                        f"--distributed-port {port} "
+                        f"--model-overrides \"{repr(model_overrides)}\" "
                     )
                 else:
                     moe_params = ""
