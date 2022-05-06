@@ -100,6 +100,7 @@ class MultilingualDatasetManager(object):
             logger.info(
                 "Using local training dataset sizes of the current shard for sampling distribution"
             )
+        self.enable_m2m_validation = getattr(args, "enable_m2m_validation", False)
 
     @classmethod
     def setup_data_manager(cls, args, lang_pairs, langs, dicts, sampling_method):
@@ -307,6 +308,13 @@ class MultilingualDatasetManager(object):
             default=False,
             action="store_true",
             help="If True, use the training dataset size of the current shard only for sampling distribution",
+        )
+        parser.add_argument(
+            "--enable-m2m-validation",
+            default=False,
+            action="store_true",
+            help="If True, validate over all training pairs xx-yy, given en-xx or xx-en"
+            "and en-yy or yy-en valid files are available.",
         )
 
     @classmethod
@@ -571,11 +579,37 @@ class MultilingualDatasetManager(object):
 
             # infer langcode
             if self.split_exists(split_k, src, tgt, src, data_path, dataset_impl):
-                prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, src, tgt))
+                prefix_src = prefix_tgt = os.path.join(
+                    data_path, "{}.{}-{}.".format(split_k, src, tgt)
+                )
             elif self.split_exists(split_k, tgt, src, src, data_path, dataset_impl):
-                prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, tgt, src))
+                prefix_src = prefix_tgt = os.path.join(
+                    data_path, "{}.{}-{}.".format(split_k, tgt, src)
+                )
+            elif (
+                self.enable_m2m_validation
+                and split_k in ["valid", "test"]
+                and (
+                    self.split_exists(split_k, "eng", src, src, data_path, dataset_impl)
+                    or self.split_exists(
+                        split_k, src, "eng", src, data_path, dataset_impl
+                    )
+                )
+                and (
+                    self.split_exists(split_k, "eng", tgt, tgt, data_path, dataset_impl)
+                    or self.split_exists(
+                        split_k, tgt, "eng", tgt, data_path, dataset_impl
+                    )
+                )
+            ):
+                src_dir = f"{src}-eng" if src < "eng" else f"eng-{src}"
+                tgt_dir = f"{tgt}-eng" if tgt < "eng" else f"eng-{tgt}"
+                prefix_src = os.path.join(data_path, f"{split_k}.{src_dir}.")
+                prefix_tgt = os.path.join(data_path, f"{split_k}.{tgt_dir}.")
             else:
-                if k > 0:
+                if k == 0:
+                    continue
+                elif k > 0:
                     break
                 else:
                     logger.error(
@@ -585,7 +619,7 @@ class MultilingualDatasetManager(object):
                         "Dataset not found: {} ({})".format(split, data_path)
                     )
 
-            src_dataset = self.load_data(prefix + src, src_dict, dataset_impl)
+            src_dataset = self.load_data(prefix_src + src, src_dict, dataset_impl)
             if truncate_source:
                 src_dataset = AppendTokenDataset(
                     TruncateDataset(
@@ -595,7 +629,9 @@ class MultilingualDatasetManager(object):
                     src_dict.eos(),
                 )
             src_datasets.append(src_dataset)
-            tgt_datasets.append(self.load_data(prefix + tgt, tgt_dict, dataset_impl))
+            tgt_datasets.append(
+                self.load_data(prefix_tgt + tgt, tgt_dict, dataset_impl)
+            )
 
             logger.info(
                 "{} {} {}-{} {} examples".format(
@@ -959,6 +995,21 @@ class MultilingualDatasetManager(object):
                     elif f"{tgt}-{src}" in shards_dict:
                         # follow the fairseq tradition to use reversed direction data if it is not available
                         num_shards_dict[key] = shards_dict[f"{tgt}-{src}"]
+                    elif (
+                        self.enable_m2m_validation
+                        and split in ["valid", "test"]
+                        and (f"eng-{src}" in shards_dict or f"{src}-eng" in shards_dict)
+                        and (f"eng-{tgt}" in shards_dict or f"{tgt}-eng" in shards_dict)
+                    ):
+                        if f"eng-{src}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"eng-{src}"]
+                        elif f"{src}-eng" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{src}-eng"]
+                        elif f"eng-{tgt}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"eng-{tgt}"]
+                        elif f"{tgt}-eng" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{tgt}-eng"]
+
         self._num_shards_dict[split] = num_shards_dict
         logger.info(f"[{split}] num of shards: {num_shards_dict}")
         return num_shards_dict

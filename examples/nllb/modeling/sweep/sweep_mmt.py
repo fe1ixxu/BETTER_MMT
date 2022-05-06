@@ -210,12 +210,22 @@ def add_extra_options_func(parser):
     parser.add_argument("--moe-base-model", action="store_true")
 
     # Moe:
-    parser.add_argument( 
-        "--moe-expert-count", 
-        type=int, 
-        default=None, 
+    parser.add_argument(
+        "--moe-expert-count",
+        type=int,
+        default=None,
         help="Number of experts per MoE layer",
-    ) 
+    )
+
+    # Validate over all xx-yy pairs
+    parser.add_argument(
+        "--enable-m2m-validation",
+        default=False,
+        action="store_true",
+        help="If True, validate over all training pairs xx-yy, given en-xx or xx-en"
+        "and en-yy or yy-en valid files are available.",
+    )
+
 
 def get_grid(args):
     task = args.task
@@ -269,10 +279,11 @@ def get_grid(args):
             else "moe_label_smoothed_cross_entropy",
         ),
         hyperparam("--label-smoothing", 0.1),
-        hyperparam("--best-checkpoint-metric", 
-                    args.best_checkpoint_metric,
-                    # save_dir_key=lambda val: f"ckp_best_{val}"
-                   ),
+        hyperparam(
+            "--best-checkpoint-metric",
+            args.best_checkpoint_metric,
+            # save_dir_key=lambda val: f"ckp_best_{val}"
+        ),
         hyperparam(
             "--max-tokens", args.max_tokens, save_dir_key=lambda val: f"maxtok{val}"
         ),
@@ -294,6 +305,11 @@ def get_grid(args):
             save_dir_key=lambda val: f"max_pos{val}",
         ),
         hyperparam("--max-target-positions", args.max_pos),
+        hyperparam(
+            "--enable-m2m-validation",
+            args.enable_m2m_validation,
+            binary_flag=True,
+        ),
         # hyperparam("--batch-size", 16, save_dir_key=lambda val: f"bsz{val}"),
         # hyperparam("--pad-to-fixed-length"),
     ]
@@ -373,7 +389,10 @@ def get_grid(args):
                 #     args.decoder_moe_freq,
                 #     save_dir_key=lambda val: f"dmq{val}",
                 # ),
-                hyperparam("--moe-expert-count", args.moe_expert_count or (args.num_nodes * args.num_gpus)),
+                hyperparam(
+                    "--moe-expert-count",
+                    args.moe_expert_count or (args.num_nodes * args.num_gpus),
+                ),
                 hyperparam("--moe-eval-capacity-token-fraction", args.moe_eval_cap),
                 hyperparam("--moe-freq", [args.moe_freq]),
                 hyperparam("--use-moe-pad-mask"),
@@ -382,7 +401,9 @@ def get_grid(args):
                 # hyperparam("--use-tutel-moe"),
             ]
         )
-        if args.moe_expert_count is not None and args.moe_expert_count < (args.num_nodes * args.num_gpus):
+        if args.moe_expert_count is not None and args.moe_expert_count < (
+            args.num_nodes * args.num_gpus
+        ):
             grids.append(hyperparam("--use-sharded-state"))
 
         if args.moe_eval_cap > 0.25:
