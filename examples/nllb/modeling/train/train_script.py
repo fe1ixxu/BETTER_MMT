@@ -77,6 +77,7 @@ class TrainConfig:
     moe_eval_cap: float = 1.0
     checkpoint_activations: bool = False
     zero2: bool = False
+    train_subset: str = "train"
 
 
 @dataclass
@@ -136,9 +137,12 @@ class TrainModule(NLLBModule):
         )
         zero2_param = "--zero2" if cfg.zero2 else ""
 
-        print('MoE params ', cfg.model_type.moe_param)
+        print("MoE params ", cfg.model_type.moe_param)
         if cfg.model_type.moe_param:
-            moe_params = cfg.model_type.moe_param + f" --moe-expert-count {cfg.model_type.expert_count}"
+            moe_params = (
+                cfg.model_type.moe_param
+                + f" --moe-expert-count {cfg.model_type.expert_count}"
+            )
         else:
             moe_params = ""
         sweep_command = f"""
@@ -176,6 +180,7 @@ class TrainModule(NLLBModule):
                 --validate-interval-updates {cfg.validate_interval_updates} \
                 --best-checkpoint-metric {cfg.best_checkpoint_metric} \
                 --seed {cfg.seed} \
+                --train-subset {cfg.train_subset} \
                 --snapshot-code \
                 --use-local-shard-size \
                 {checkpoint_activations_param} \
@@ -187,11 +192,15 @@ class TrainModule(NLLBModule):
         print(sweep_command)
 
         subprocess.run(
-            sweep_command, shell=True, check=True,
+            sweep_command,
+            shell=True,
+            check=True,
         )
 
     async def run(
-        self, iteration_value: tp.Optional[tp.Any] = None, iteration_index: int = 0,
+        self,
+        iteration_value: tp.Optional[tp.Any] = None,
+        iteration_index: int = 0,
     ):
         # launching one training job synchronously for now
         pass

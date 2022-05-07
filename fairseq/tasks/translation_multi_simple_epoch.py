@@ -130,6 +130,10 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
 
     @classmethod
     def setup_task(cls, args, **kwargs):
+        if getattr(args, "train_subset", None) is not None:
+            if not all(s.startswith("train") for s in args.train_subset.split(",")):
+                raise ValueError('Train splits should be named like "train*".')
+
         langs, dicts, training = MultilingualDatasetManager.prepare(
             cls.load_dictionary, args, **kwargs
         )

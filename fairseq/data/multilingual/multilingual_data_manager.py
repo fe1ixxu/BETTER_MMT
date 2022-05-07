@@ -27,6 +27,7 @@ from fairseq.data import (
     indexed_dataset,
 )
 from fairseq.data.multilingual.multilingual_utils import (
+    DATA_SOURCE_PREFIX_TAGS,
     EncoderLangtok,
     LangTokSpec,
     LangTokStyle,
@@ -234,7 +235,7 @@ class MultilingualDatasetManager(object):
         parser.add_argument(
             "--extra-data",
             help='a dictionary of data name to this path, \
-                            e.g. {"mined", path_to_mined_data, "denoised": path_to_denoised_data}',
+                            e.g. {"mined": path_to_mined_data, "denoised": path_to_denoised_data}',
             type=lambda uf: eval_str_dict(uf, type=str),
             default=None,
         )
@@ -554,6 +555,25 @@ class MultilingualDatasetManager(object):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
         return indexed_dataset.dataset_exists(filename, impl=dataset_impl)
 
+    def load_truncate_src_dataset(
+        self,
+        full_path,
+        src_dict,
+        dataset_impl,
+        max_source_positions,
+        truncate_source=False,
+    ):
+        src_dataset = self.load_data(full_path, src_dict, dataset_impl)
+        if truncate_source:
+            src_dataset = AppendTokenDataset(
+                TruncateDataset(
+                    StripTokenDataset(src_dataset, src_dict.eos()),
+                    max_source_positions - 1,
+                ),
+                src_dict.eos(),
+            )
+        return src_dataset
+
     def load_lang_dataset(
         self,
         data_path,
@@ -574,73 +594,119 @@ class MultilingualDatasetManager(object):
         src_datasets = []
         tgt_datasets = []
 
-        for k in itertools.count():
-            split_k = split + (str(k) if k > 0 else "")
+        if split == getattr(self.args, "train_subset", None):
+            for train_split in split.split(","):
+                train_prefix = ""
+                if self.split_exists(
+                    train_split, src, tgt, src, data_path, dataset_impl
+                ):
+                    train_prefix = os.path.join(
+                        data_path, "{}.{}-{}.".format(train_split, src, tgt)
+                    )
+                # Don't wanna reverse directions for the BT subset.
+                elif "bt" not in train_split.split("_") and self.split_exists(
+                    train_split, tgt, src, src, data_path, dataset_impl
+                ):
+                    train_prefix = os.path.join(
+                        data_path, "{}.{}-{}.".format(train_split, tgt, src)
+                    )
+                if train_prefix:
+                    src_dataset = self.load_truncate_src_dataset(
+                        train_prefix + src,
+                        src_dict,
+                        dataset_impl,
+                        max_source_positions,
+                        truncate_source,
+                    )
+                    # Prepend prefix tag if it's a "train_<fold>" data source.
+                    for fold in DATA_SOURCE_PREFIX_TAGS:
+                        if train_split == f"train_{fold}":
+                            logger.info(
+                                f"Prepending prefix token: {DATA_SOURCE_PREFIX_TAGS[fold]} for {train_split} data."
+                            )
+                            src_dataset = PrependTokenDataset(
+                                src_dataset,
+                                src_dict.index(DATA_SOURCE_PREFIX_TAGS[fold]),
+                            )
+                    src_datasets.append(src_dataset)
+                    tgt_datasets.append(
+                        self.load_data(train_prefix + tgt, tgt_dict, dataset_impl)
+                    )
+                    logger.info(
+                        "{} {} {}-{} {} examples".format(
+                            data_path, train_split, src, tgt, len(src_datasets[-1])
+                        )
+                    )
+        else:
+            for k in itertools.count():
+                split_k = split + (str(k) if k > 0 else "")
 
-            # infer langcode
-            if self.split_exists(split_k, src, tgt, src, data_path, dataset_impl):
-                prefix_src = prefix_tgt = os.path.join(
-                    data_path, "{}.{}-{}.".format(split_k, src, tgt)
-                )
-            elif self.split_exists(split_k, tgt, src, src, data_path, dataset_impl):
-                prefix_src = prefix_tgt = os.path.join(
-                    data_path, "{}.{}-{}.".format(split_k, tgt, src)
-                )
-            elif (
-                self.enable_m2m_validation
-                and split_k in ["valid", "test"]
-                and (
-                    self.split_exists(split_k, "eng", src, src, data_path, dataset_impl)
-                    or self.split_exists(
-                        split_k, src, "eng", src, data_path, dataset_impl
+                # infer langcode
+                if self.split_exists(split_k, src, tgt, src, data_path, dataset_impl):
+                    prefix_src = prefix_tgt = os.path.join(
+                        data_path, "{}.{}-{}.".format(split_k, src, tgt)
                     )
-                )
-                and (
-                    self.split_exists(split_k, "eng", tgt, tgt, data_path, dataset_impl)
-                    or self.split_exists(
-                        split_k, tgt, "eng", tgt, data_path, dataset_impl
+                elif self.split_exists(split_k, tgt, src, src, data_path, dataset_impl):
+                    prefix_src = prefix_tgt = os.path.join(
+                        data_path, "{}.{}-{}.".format(split_k, tgt, src)
                     )
-                )
-            ):
-                src_dir = f"{src}-eng" if src < "eng" else f"eng-{src}"
-                tgt_dir = f"{tgt}-eng" if tgt < "eng" else f"eng-{tgt}"
-                prefix_src = os.path.join(data_path, f"{split_k}.{src_dir}.")
-                prefix_tgt = os.path.join(data_path, f"{split_k}.{tgt_dir}.")
-            else:
-                if k == 0:
-                    continue
-                elif k > 0:
-                    break
+                elif (
+                    self.enable_m2m_validation
+                    and split_k in ["valid", "test"]
+                    and (
+                        self.split_exists(
+                            split_k, "eng", src, src, data_path, dataset_impl
+                        )
+                        or self.split_exists(
+                            split_k, src, "eng", src, data_path, dataset_impl
+                        )
+                    )
+                    and (
+                        self.split_exists(
+                            split_k, "eng", tgt, tgt, data_path, dataset_impl
+                        )
+                        or self.split_exists(
+                            split_k, tgt, "eng", tgt, data_path, dataset_impl
+                        )
+                    )
+                ):
+                    src_dir = f"{src}-eng" if src < "eng" else f"eng-{src}"
+                    tgt_dir = f"{tgt}-eng" if tgt < "eng" else f"eng-{tgt}"
+                    prefix_src = os.path.join(data_path, f"{split_k}.{src_dir}.")
+                    prefix_tgt = os.path.join(data_path, f"{split_k}.{tgt_dir}.")
                 else:
-                    logger.error(
-                        f"Dataset not found: {data_path}, {split_k}, {src}, {tgt}"
-                    )
-                    raise FileNotFoundError(
-                        "Dataset not found: {} ({})".format(split, data_path)
-                    )
+                    if k == 0:
+                        continue
+                    elif k > 0:
+                        break
+                    else:
+                        logger.error(
+                            f"Dataset not found: {data_path}, {split_k}, {src}, {tgt}"
+                        )
+                        raise FileNotFoundError(
+                            "Dataset not found: {} ({})".format(split, data_path)
+                        )
 
-            src_dataset = self.load_data(prefix_src + src, src_dict, dataset_impl)
-            if truncate_source:
-                src_dataset = AppendTokenDataset(
-                    TruncateDataset(
-                        StripTokenDataset(src_dataset, src_dict.eos()),
-                        max_source_positions - 1,
-                    ),
-                    src_dict.eos(),
+                src_dataset = self.load_truncate_src_dataset(
+                    prefix_src + src,
+                    src_dict,
+                    dataset_impl,
+                    max_source_positions,
+                    truncate_source,
                 )
-            src_datasets.append(src_dataset)
-            tgt_datasets.append(
-                self.load_data(prefix_tgt + tgt, tgt_dict, dataset_impl)
-            )
-
-            logger.info(
-                "{} {} {}-{} {} examples".format(
-                    data_path, split_k, src, tgt, len(src_datasets[-1])
+                src_datasets.append(src_dataset)
+                tgt_datasets.append(
+                    self.load_data(prefix_tgt + tgt, tgt_dict, dataset_impl)
                 )
-            )
 
-            if not combine:
-                break
+                logger.info(
+                    "{} {} {}-{} {} examples".format(
+                        data_path, split_k, src, tgt, len(src_datasets[-1])
+                    )
+                )
+
+                if not combine:
+                    break
 
         assert len(src_datasets) == len(tgt_datasets)
 
@@ -651,6 +717,9 @@ class MultilingualDatasetManager(object):
             sample_ratios[0] = upsample_primary
             src_dataset = ConcatDataset(src_datasets, sample_ratios)
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
+            assert len(src_dataset) == upsample_primary * len(src_datasets[0]) + sum(
+                [len(d) for d in src_datasets[1:]]
+            )
 
         if prepend_bos:
             assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
@@ -692,7 +761,7 @@ class MultilingualDatasetManager(object):
         src_lang_id=None,
         tgt_lang_id=None,
         langpairs_sharing_datasets=None,
-    ):
+    ) -> LanguagePairDataset:
         norm_direction = "-".join(sorted([src, tgt]))
         if langpairs_sharing_datasets is not None:
             src_dataset = langpairs_sharing_datasets.get(
@@ -957,7 +1026,13 @@ class MultilingualDatasetManager(object):
             files = PathManager.ls(path)
             directions = set()
             for f in files:
-                if f.startswith(split) and f.endswith(".idx"):
+                if "," in split:
+                    for split_sub in split.split(","):
+                        if f.startswith(split_sub) and f.endswith(".idx"):
+                            # idx files of the form "{split}.{src}-{tgt}.{lang}.idx"
+                            direction = f.split(".")[-3]
+                            directions.add(direction)
+                elif f.startswith(split) and f.endswith(".idx"):
                     # idx files of the form "{split}.{src}-{tgt}.{lang}.idx"
                     direction = f.split(".")[-3]
                     directions.add(direction)

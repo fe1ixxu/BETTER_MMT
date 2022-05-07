@@ -203,6 +203,12 @@ def add_extra_options_func(parser):
         default=False,
         help="FSDP in zero2 mode (shard only gradients and OSS, not parameters)",
     )
+    parser.add_argument(
+        "--train-subset",
+        default="train",
+        type=str,
+        help="specify training data sources",
+    )
 
     # addded adapter parameters
     parser.add_argument("--base-model", type=str, default=None)
@@ -477,6 +483,15 @@ def get_grid(args):
         )
     if args.moe_base_model:
         grids.append(hyperparam("--moe-base-model"))
+
+    if args.train_subset:
+        grids.append(
+            hyperparam(
+                "--train-subset",
+                args.train_subset,
+                save_dir_key=lambda val: f"ts_{val}",
+            )
+        )
 
     return grids
 

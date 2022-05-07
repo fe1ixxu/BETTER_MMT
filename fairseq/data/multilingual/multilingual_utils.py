@@ -2,7 +2,14 @@ from enum import Enum
 from typing import Dict, List, Optional, Sequence
 
 import torch
+
 from fairseq.data import Dictionary
+
+DATA_SOURCE_PREFIX_TAGS = {
+    "mining": "<MINED_DATA>",
+    "mmt_bt": "<MMT_BT_DATA>",
+    "smt_bt": "<SMT_BT_DATA>",
+}
 
 
 class EncoderLangtok(Enum):
@@ -61,3 +68,7 @@ def augment_dictionary(
         extra_data is not None and LangTokSpec.mono_dae.value in extra_data
     ):
         dictionary.add_symbol("<mask>")
+
+    # Add special tokens.
+    for name, tok in DATA_SOURCE_PREFIX_TAGS.items():
+        dictionary.add_symbol(tok)
