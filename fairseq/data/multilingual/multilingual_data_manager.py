@@ -1058,9 +1058,15 @@ class MultilingualDatasetManager(object):
                 )
                 # logger.info(f"preparing param for {data_category}: {src} - {tgt}")
                 key = self.get_dataset_key(data_category, src, tgt)
-                data_path = self.get_split_data_path(
-                    paths, epoch, shard_epoch, split_num_shards_dict[key]
-                )
+                if key in split_num_shards_dict:
+                    data_path = self.get_split_data_path(
+                        paths, epoch, shard_epoch, split_num_shards_dict[key]
+                    )
+                else:
+                    logger.info(
+                        f"{data_category}: {src} - {tgt} not available. Skipping."
+                    )
+                    continue
                 param_list.append(
                     {
                         "key": key,
