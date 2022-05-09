@@ -1025,17 +1025,13 @@ class MultilingualDatasetManager(object):
         for path in paths:
             files = PathManager.ls(path)
             directions = set()
+            split_subs = split.split(",")
             for f in files:
-                if "," in split:
-                    for split_sub in split.split(","):
-                        if f.startswith(split_sub) and f.endswith(".idx"):
-                            # idx files of the form "{split}.{src}-{tgt}.{lang}.idx"
-                            direction = f.split(".")[-3]
-                            directions.add(direction)
-                elif f.startswith(split) and f.endswith(".idx"):
-                    # idx files of the form "{split}.{src}-{tgt}.{lang}.idx"
-                    direction = f.split(".")[-3]
-                    directions.add(direction)
+                for split_sub in split_subs:
+                    if f.startswith(f"{split_sub}.") and f.endswith(".idx"):
+                        # idx files of the form "{split}.{src}-{tgt}.{lang}.idx"
+                        direction = f.split(".")[-3]
+                        directions.add(direction)
             for direction in directions:
                 shards[direction] += 1
         return shards
