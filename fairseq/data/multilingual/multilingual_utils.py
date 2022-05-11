@@ -57,6 +57,7 @@ def augment_dictionary(
     lang_tok_style: str,
     langtoks_specs: Sequence[str] = (LangTokSpec.main.value,),
     extra_data: Optional[Dict[str, str]] = None,
+    add_data_source_prefix_tags: bool = False,
 ) -> None:
     for spec in langtoks_specs:
         for language in language_list:
@@ -70,5 +71,6 @@ def augment_dictionary(
         dictionary.add_symbol("<mask>")
 
     # Add special tokens.
-    for name, tok in DATA_SOURCE_PREFIX_TAGS.items():
-        dictionary.add_symbol(tok)
+    if add_data_source_prefix_tags:
+        for name, tok in DATA_SOURCE_PREFIX_TAGS.items():
+            dictionary.add_symbol(tok)

@@ -317,6 +317,12 @@ class MultilingualDatasetManager(object):
             help="If True, validate over all training pairs xx-yy, given en-xx or xx-en"
             "and en-yy or yy-en valid files are available.",
         )
+        parser.add_argument(
+            "--add-data-source-prefix-tags",
+            default=False,
+            action="store_true",
+            help="Add mined, mmt_bt and smt_bt tags to the dictionary",
+        )
 
     @classmethod
     def load_langs(cls, args, **kwargs):
@@ -424,6 +430,7 @@ class MultilingualDatasetManager(object):
                 lang_tok_style=args.lang_tok_style,
                 langtoks_specs=args.langtoks_specs,
                 extra_data=args.extra_data,
+                add_data_source_prefix_tags=args.add_data_source_prefix_tags,
             )
             return d
 
