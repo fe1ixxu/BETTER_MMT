@@ -8,6 +8,7 @@ Train a network across multiple GPUs.
 """
 
 import contextlib
+import gc
 import logging
 import os
 import re
@@ -965,6 +966,9 @@ class Trainer(object):
                         **extra_kwargs,
                     )
                     del loss
+
+                if self.get_num_updates() % 100 == 0:
+                    gc.collect()
 
                 logging_outputs.append(logging_output)
                 sample_size += sample_size_i
