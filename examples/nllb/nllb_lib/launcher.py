@@ -26,7 +26,7 @@ from examples.nllb.nllb_lib.nllb_module import (
     LocalOnlyRequirements,
 )
 from examples.nllb.nllb_lib.utils import sha_key
-from examples.nllb.modeling.utils import awaitable_job
+from examples.nllb.modeling.utils import awaitable_cleanup_job
 
 if tp.TYPE_CHECKING:
     from examples.nllb.nllb_lib import NLLBModule
@@ -462,7 +462,7 @@ class SubmititLauncher(Launcher):
             self.executor.update_parameters(**mapped_reqs)
 
     async def _wrap_jobindex(self, job, idx):
-        return (idx, await awaitable_job(job))
+        return (idx, await awaitable_cleanup_job(job))
 
     def uncached_schedule_iterator(
         self,
@@ -525,4 +525,4 @@ class SubmititLauncher(Launcher):
         logger.info(f"Added job with id: {nllb_job.job_id} to registry")
         logger.info(nllb_job.get_job_info_log())
 
-        return await awaitable_job(job)
+        return await awaitable_cleanup_job(job)

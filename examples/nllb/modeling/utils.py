@@ -22,6 +22,13 @@ async def awaitable_job(job: Job[JT], poll_s: int = 1) -> JT:
     return job.result()
 
 
+async def awaitable_cleanup_job(job: Job[JT], poll_s: int = 1) -> JT:
+    result = await awaitable_job(job)
+    # if job is scheduled with cancel_at_deletion, `del job` will cancel it
+    del job
+    return result
+
+
 def execute_in_shell(command, shell=True, dry_run=False, quiet=True):
     """Execute commands in the shell
 
