@@ -439,7 +439,8 @@ def validate_and_save(
     # Validate
     valid_losses = [None]
     if do_validate:
-        valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
+        # only validate the first subset before save_checkpoint
+        valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets[:1])
 
     should_stop |= should_stop_early(cfg, valid_losses[0])
 
@@ -455,6 +456,10 @@ def validate_and_save(
             if cfg.checkpoint.s3_upload_path
             else None,
         )
+
+    if do_validate and len(valid_subsets) > 1:
+        # the rest of the validation subsets
+        valid_losses += validate(cfg, trainer, task, epoch_itr, valid_subsets[1:])
 
     trainer.reset_dummy_batch(epoch_itr.first_batch)
     return valid_losses, should_stop
