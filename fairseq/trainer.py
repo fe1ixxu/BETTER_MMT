@@ -1187,6 +1187,10 @@ class Trainer(object):
                     logging_outputs = self._xla_markstep_and_send_to_cpu(
                         logging_outputs
                     )
+                    # workaround for getting lang_idx into logging_outputs
+                    # since we can't reduce sum strings
+                    logging_outputs[0]["lang_idx"] = getattr(self.task, "langs", None)
+
                     logging_output = self._reduce_and_log_stats(
                         logging_outputs, sample_size, grad_norm
                     )
@@ -1201,6 +1205,7 @@ class Trainer(object):
                     self._log_gpu_mem_stats()
 
                 # log stats
+                logging_outputs[0]["lang_idx"] = getattr(self.task, "langs", None)
                 logging_output = self._reduce_and_log_stats(
                     logging_outputs, sample_size, grad_norm
                 )
@@ -1303,6 +1308,7 @@ class Trainer(object):
                 ignore=is_dummy_batch,
             )
 
+        logging_outputs[0]["lang_idx"] = getattr(self.task, "langs", None)
         # log validation stats
         if self.tpu:
             logging_outputs = self._xla_markstep_and_send_to_cpu(logging_outputs)

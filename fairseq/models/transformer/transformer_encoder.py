@@ -53,7 +53,9 @@ class TransformerEncoderBase(FairseqEncoder):
         self.register_buffer("version", torch.Tensor([3]))
 
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
+            cfg.dropout,
+            module_name=module_name_fordropout(self.__class__.__name__),
+            dropout_2d=cfg.emb_dropout_2d,
         )
         self.encoder_layerdrop = cfg.encoder.layerdrop
         self.return_fc = return_fc
@@ -90,12 +92,12 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.quant_noise = None
 
-        if self.encoder_layerdrop > 0.0:
-            self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
-        else:
-            self.layers = nn.ModuleList([])
+        # if self.encoder_layerdrop > 0.0:
+        #     self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
+        # else:
+        self.layers = nn.ModuleList([])
         moe_freq = max(cfg.encoder_moe_freq, cfg.moe_freq)
-        for i in range(cfg.encoder.layers):
+        for i in range(cfg.encoder_layers):
             is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
             self.layers.append(self.build_encoder_layer(cfg, is_moe_layer=is_moe_layer))
         self.num_layers = len(self.layers)
@@ -219,15 +221,31 @@ class TransformerEncoderBase(FairseqEncoder):
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
-        encoder_states = []
-        fc_results = []
+        src_lengths = (
+            src_tokens.ne(self.padding_idx)
+            .sum(dim=1, dtype=torch.int32)
+            .reshape(-1, 1)
+            .contiguous()
+        )
+
+        results = {
+            "encoder_padding_mask": [encoder_padding_mask],  # B x T
+            "encoder_embedding": [encoder_embedding],  # B x T x C
+            "encoder_states": [],  # List[T x B x C]
+            "fc_results": [],  # List[T x B x C]
+            "src_tokens": [src_lengths],
+            "src_lengths": [],
+        }
 
         if return_all_hiddens:
-            encoder_states.append(x)
+            results["encoder_states"].append(x)
 
         # encoder layers
-        l_aux = []
-        for layer in self.layers:
+        loss_keys = ["moe_gate_loss", "clsr_gate_loss_num", "clsr_gate_loss_denom"]
+        for key in loss_keys:
+            results[key] = []
+        dropout_probs = torch.empty(len(self.layers)).uniform_()
+        for i, layer in enumerate(self.layers):
             passed_src_tokens = (
                 src_tokens if self.cfg.pass_tokens_transformer_layer else None
             )
@@ -236,42 +254,41 @@ class TransformerEncoderBase(FairseqEncoder):
                 encoder_padding_mask=encoder_padding_mask if has_pads else None,
                 tokens=passed_src_tokens,
             )
-
             if isinstance(lr, tuple) and len(lr) == 2:
-                x, fc_result = lr
+                tmp_x, fc_result = lr
             else:
-                x = lr
+                tmp_x = lr
                 fc_result = None
-
+            moe_layerdrop = (
+                getattr(layer, "is_moe_layer", False) or not self.cfg.moe_layerdrop_only
+            )
+            if (
+                self.training
+                and (dropout_probs[i] < self.encoder_layerdrop)
+                and moe_layerdrop
+            ):
+                x = x + tmp_x * 0
+                if l_aux_i is not None:
+                    for k, v in l_aux_i.items():
+                        l_aux_i[k] = v * 0
+            else:
+                x = tmp_x
             if return_all_hiddens and not torch.jit.is_scripting():
-                assert encoder_states is not None
-                encoder_states.append(x)
-                fc_results.append(fc_result)
-            l_aux.append(l_aux_i)
+                results["encoder_states"].append(x)
+                results["fc_results"].append(fc_result)
+            for key in loss_keys:
+                results[key].append((l_aux_i or {}).get(key, None))
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
+
+        results["encoder_out"] = [x]  # T x B x C
 
         # The Pytorch Mobile lite interpreter does not supports returning NamedTuple in
         # `forward` so we use a dictionary instead.
         # TorchScript does not support mixed values so the values are all lists.
         # The empty list is equivalent to None.
-        src_lengths = (
-            src_tokens.ne(self.padding_idx)
-            .sum(dim=1, dtype=torch.int32)
-            .reshape(-1, 1)
-            .contiguous()
-        )
-        return {
-            "encoder_out": [x],  # T x B x C
-            "encoder_padding_mask": [encoder_padding_mask],  # B x T
-            "encoder_embedding": [encoder_embedding],  # B x T x C
-            "encoder_states": encoder_states,  # List[T x B x C]
-            "fc_results": fc_results,  # List[T x B x C]
-            "src_tokens": [],
-            "src_lengths": [src_lengths],
-            "l_aux": l_aux,
-        }
+        return results
 
     @torch.jit.export
     def reorder_encoder_out(self, encoder_out: Dict[str, List[Tensor]], new_order):
@@ -369,6 +386,5 @@ class TransformerEncoder(TransformerEncoderBase):
 
     def build_encoder_layer(self, args, is_moe_layer=False):
         return super().build_encoder_layer(
-            TransformerConfig.from_namespace(args),
-            is_moe_layer=is_moe_layer,
+            TransformerConfig.from_namespace(args), is_moe_layer=is_moe_layer
         )

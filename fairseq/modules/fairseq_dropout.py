@@ -6,25 +6,39 @@
 import logging
 from typing import List, Optional
 
-import torch.nn as nn
+import torch
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
 
-class FairseqDropout(nn.Module):
-    def __init__(self, p, module_name=None):
+class FairseqDropout(torch.nn.Module):
+    def __init__(self, p, module_name=None, dropout_2d=0.0):
         super().__init__()
         self.p = p
         self.module_name = module_name
         self.apply_during_inference = False
+        self.dropout_2d = dropout_2d
 
     def extra_repr(self) -> str:
         return "p={}".format(self.p)
 
     def forward(self, x, inplace: bool = False):
-        if self.p > 0 and (self.training or self.apply_during_inference):
-            return F.dropout(x, p=self.p, training=True, inplace=inplace)
+        if (self.p > 0 or self.dropout_2d > 0) and (
+            self.training or self.apply_during_inference
+        ):
+            x = F.dropout(x, p=self.p, training=True, inplace=inplace)
+            if self.dropout_2d > 0.0:
+                # TODO: replace w Dropout2d
+                if self.training:
+                    mask = (
+                        torch.empty(x.shape[:-1], device=x.device).uniform_()
+                        > self.dropout_2d
+                    )
+                    x = mask.unsqueeze(-1) * x
+                else:
+                    x = x * (1 - self.dropout_2d)
+            return x
         else:
             return x
 

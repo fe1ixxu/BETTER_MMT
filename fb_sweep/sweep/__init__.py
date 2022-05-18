@@ -205,6 +205,16 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
             ),
             help="save checkpoints and logs in <checkpoints-dir>/<prefix>.<save_dir_key>",
         )
+        parser.add_argument(
+            "--log-dir",
+            default=None,
+            help="save logs in <log-dir>/<prefix>.<save_dir_key> if specified; else <checkpoints-dir>",
+        )
+        parser.add_argument(
+            "--skip-create-save-dir",
+            action="store_true",
+            help="skip creating save dir when launching job; useful if launching jobs on rsccpu",
+        )
         parser.add_argument("--cpus-per-task", type=str, default=str(cpus_per_task))
         parser.add_argument("--cpu-bind", default=default_cpu_bind)
         parser.add_argument(

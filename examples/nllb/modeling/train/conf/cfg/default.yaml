@@ -6,6 +6,7 @@ defaults:
 
 fairseq_root: ???
 output_dir: ???
+log_dir: null
 
 train_prefix: "dense"
 seed: 2

@@ -52,6 +52,7 @@ class TrainConfig:
     model_type: ModelTypeConfig = ModelTypeConfig()
     fairseq_root: str = MISSING
     output_dir: str = MISSING
+    log_dir: str = None
     train_prefix: str = MISSING
     seed: int = MISSING
     arch: str = MISSING
@@ -93,10 +94,11 @@ class TrainModule(NLLBModule):
         cfg = config.cfg
 
         self.output_dir = cfg.output_dir
-        os.makedirs(self.output_dir, exist_ok=True)
-        print("TRAINING DIR: ", self.output_dir)
+        self.log_dir = cfg.log_dir or cfg.output_dir
+        os.makedirs(self.log_dir, exist_ok=True)
+        print("TRAINING DIR: ", self.log_dir)
 
-        config_yaml_file = os.path.join(self.output_dir, "train_script.yaml")
+        config_yaml_file = os.path.join(self.log_dir, "train_script.yaml")
         with open(config_yaml_file, "w") as f:
             f.write(OmegaConf.to_yaml(config.cfg))
 
@@ -117,6 +119,9 @@ class TrainModule(NLLBModule):
     def launch_job(self):
         # values in cfg configurable through entire .yaml files in conf/cfg/
         cfg = self.config.cfg
+        log_dir_str = ""
+        if cfg.log_dir is not None:
+            log_dir_str = f"--log-dir {self.log_dir} --skip-create-save-dir"
 
         if cfg.dataset.langs is None:
             assert cfg.dataset.langs_file is not None
@@ -151,6 +156,7 @@ class TrainModule(NLLBModule):
                 -d {self.data_dir} \
                 -p {cfg.train_prefix} \
                 --checkpoints-dir {self.output_dir} \
+                {log_dir_str} \
                 --partition {cfg.cluster.partition} \
                 -t {cfg.num_trials} \
                 -n {cfg.num_nodes} \

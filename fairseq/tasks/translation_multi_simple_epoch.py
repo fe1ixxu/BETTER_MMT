@@ -21,6 +21,7 @@ from fairseq.data import (
 from fairseq.data.multilingual.multilingual_data_manager import (
     MultilingualDatasetManager,
 )
+from fairseq.data.multilingual.multilingual_utils import get_lang_tok, LangTokStyle
 from fairseq.data.multilingual.sampling_method import SamplingMethod
 from fairseq.tasks import LegacyFairseqTask, register_task
 from fairseq.utils import FileContentsAction
@@ -109,7 +110,19 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         self.data_manager = MultilingualDatasetManager.setup_data_manager(
             args, self.lang_pairs, langs, dicts, self.sampling_method
         )
+        self.lang_idx = self.get_lang_idx()
         self.one_dataset_per_batch = getattr(args, "one_dataset_per_batch", False)
+
+    def get_lang_idx(self):
+        lang_idx = torch.zeros(len(self.langs) + 1, dtype=torch.int32)
+        # idx 0 for non-matching prefix tokens
+        lang_idx[0] = -1
+        for i, lang in enumerate(self.langs):
+            lang_tok = get_lang_tok(lang, LangTokStyle.multilingual.value)
+            lang_idx[i + 1] = MultilingualDatasetManager.get_langtok_index(
+                lang_tok, self.source_dictionary
+            )
+        return lang_idx
 
     def check_dicts(self, dicts, source_langs, target_langs):
         if self.args.source_dict is not None or self.args.target_dict is not None:

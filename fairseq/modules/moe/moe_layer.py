@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch import Tensor
 from torch.cuda import Event as CudaEvent
 from torch.nn import Module, ModuleList
@@ -92,6 +93,8 @@ class MOELayer(Base):
         all2all_group: Optional[Any] = None,
         max_positions: Optional[int] = None,
         init_model_on_gpu: Optional[bool] = False,
+        tok_dropout: float = 0.0,
+        moe_only_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.gate = gate
@@ -123,6 +126,8 @@ class MOELayer(Base):
             args, "moe_eval_capacity_max_seqlen", False
         )
         self.max_positions = max_positions
+        self.tok_dropout = tok_dropout
+        self.moe_only_dropout = moe_only_dropout
 
     def forward(
         self, *input: Tensor, input_padding_mask=None, prefix_tokens=None, **kwargs: Any
@@ -299,6 +304,26 @@ class MOELayer(Base):
         expert_output = torch.cat(expert_outputs, dim=1)
         if self.all2all_size > 1:
             expert_output = self.all_to_all_wrapper(expert_output)
+
+        if self.tok_dropout > 0.0:
+            # TODO: replace w Dropout2d
+            if self.training:
+                # drop out 0.2 of token rembeddings
+                mask = (
+                    torch.empty(
+                        expert_output.shape[:-1], device=expert_output.device
+                    ).uniform_()
+                    > self.tok_dropout
+                )
+                expert_output = mask.unsqueeze(-1) * expert_output
+            else:
+                expert_output = expert_output * (1 - self.tok_dropout)
+        if self.moe_only_dropout > 0.0:
+            # unit-wise dropout
+            expert_output = F.dropout(
+                expert_output, self.moe_only_dropout, self.training
+            )
+
         # Re-shape back: gecm -> ecm
         expert_output = expert_output.reshape(
             self.all2all_size * self.num_local_experts, -1, d_model
@@ -322,7 +347,7 @@ class MOELayer(Base):
 
         self.record_all_to_all_stats()
 
-        return combined_output, l_aux
+        return combined_output, {"moe_gate_loss": l_aux}
 
     def prepare_for_inference_(self):
         self.in_generation = True

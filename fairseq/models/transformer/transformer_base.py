@@ -70,6 +70,10 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
 
         src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
 
+        if cfg.clsr_log_lang_gates:
+            cfg.lang_idx = getattr(task, "lang_idx", None)
+            assert cfg.lang_idx is not None
+
         if cfg.share_all_embeddings:
             if src_dict != tgt_dict:
                 raise ValueError("--share-all-embeddings requires a joined dictionary")

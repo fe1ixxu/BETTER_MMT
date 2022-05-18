@@ -66,7 +66,9 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         self._future_mask = torch.empty(0)
 
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
+            cfg.dropout,
+            module_name=module_name_fordropout(self.__class__.__name__),
+            dropout_2d=cfg.emb_dropout_2d,
         )
         if cfg.no_emb_dropout:
             self.dropout_module = None
@@ -131,18 +133,16 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
 
         self.cross_self_attention = cfg.cross_self_attention
 
-        if self.decoder_layerdrop > 0.0:
-            self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
-        else:
-            self.layers = nn.ModuleList([])
+        # if self.decoder_layerdrop > 0.0:
+        #     self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
+        # else:
+        self.layers = nn.ModuleList([])
         moe_freq = max(cfg.decoder_moe_freq, cfg.moe_freq)
-        for i in range(cfg.decoder.layers):
+        for i in range(cfg.decoder_layers):
             is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
             self.layers.append(
                 self.build_decoder_layer(
-                    cfg,
-                    no_encoder_attn=no_encoder_attn,
-                    is_moe_layer=is_moe_layer,
+                    cfg, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer
                 )
             )
 
@@ -208,8 +208,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         num_base_layers = cfg.base_layers
         for i in range(num_base_layers):
             self.layers.insert(
-                ((i + 1) * cfg.decoder.layers) // (num_base_layers + 1),
-                BaseLayer(cfg),
+                ((i + 1) * cfg.decoder.layers) // (num_base_layers + 1), BaseLayer(cfg)
             )
 
     @staticmethod
@@ -443,35 +442,71 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
 
         # decoder layers
         attn: Optional[Tensor] = None
-        inner_states: List[Optional[Tensor]] = [x]
-        if encoder_out is None:
-            l_aux = []
-        else:
-            l_aux = encoder_out["l_aux"] if "l_aux" in encoder_out else []
+        results: Dict[str, Optional[Tensor]] = {"inner_states": [x]}
+        loss_keys = ["moe_gate_loss", "clsr_gate_loss_num", "clsr_gate_loss_denom"]
+        for key in loss_keys:
+            results[key] = []
+            if encoder_out is not None and key in encoder_out:
+                results[key] = encoder_out[key]
+        dropout_probs = torch.empty(len(self.layers)).uniform_()
         for idx, layer in enumerate(self.layers):
             prev_output_tokens = (
                 prev_output_tokens if self.cfg.pass_tokens_transformer_layer else None
             )
-            x, layer_attn, _, l_aux_i = layer(
-                x,
-                encoder_out["encoder_out"][0]
-                if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
-                else None,
-                encoder_out["encoder_padding_mask"][0]
-                if (
-                    encoder_out is not None
-                    and len(encoder_out["encoder_padding_mask"]) > 0
-                )
-                else None,
-                incremental_state,
-                self_attn_mask=self_attn_mask,
-                self_attn_padding_mask=self_attn_padding_mask,
-                need_attn=bool((idx == alignment_layer)),
-                need_head_weights=bool((idx == alignment_layer)),
-                tokens=prev_output_tokens,
+            moe_layerdrop = (
+                getattr(layer, "is_moe_layer", False) or not self.cfg.moe_layerdrop_only
             )
-            l_aux.append(l_aux_i)
-            inner_states.append(x)
+            if (
+                self.training
+                and (dropout_probs[idx] < self.decoder_layerdrop)
+                and moe_layerdrop
+            ):
+                x2, layer_attn, _, l_aux_i = layer(
+                    x,
+                    encoder_out["encoder_out"][0]
+                    if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
+                    else None,
+                    encoder_out["encoder_padding_mask"][0]
+                    if (
+                        encoder_out is not None
+                        and len(encoder_out["encoder_padding_mask"]) > 0
+                    )
+                    else None,
+                    incremental_state,
+                    self_attn_mask=self_attn_mask,
+                    self_attn_padding_mask=self_attn_padding_mask,
+                    need_attn=bool((idx == alignment_layer)),
+                    need_head_weights=bool((idx == alignment_layer)),
+                    tokens=prev_output_tokens,
+                )
+                x = x + x2 * 0
+                if l_aux_i is not None:
+                    for k, v in l_aux_i.items():
+                        l_aux_i[k] = v * 0
+                if layer_attn is not None:
+                    layer_attn = layer_attn * 0
+            else:
+                x, layer_attn, _, l_aux_i = layer(
+                    x,
+                    encoder_out["encoder_out"][0]
+                    if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
+                    else None,
+                    encoder_out["encoder_padding_mask"][0]
+                    if (
+                        encoder_out is not None
+                        and len(encoder_out["encoder_padding_mask"]) > 0
+                    )
+                    else None,
+                    incremental_state,
+                    self_attn_mask=self_attn_mask,
+                    self_attn_padding_mask=self_attn_padding_mask,
+                    need_attn=bool((idx == alignment_layer)),
+                    need_head_weights=bool((idx == alignment_layer)),
+                    tokens=prev_output_tokens,
+                )
+            for key in loss_keys:
+                results[key].append((l_aux_i or {}).get(key, None))
+            results["inner_states"].append(x)
             if layer_attn is not None and idx == alignment_layer:
                 attn = layer_attn.float().to(x)
 
@@ -481,6 +516,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
 
             # average probabilities over heads
             attn = attn.mean(dim=0)
+        results["attn"] = [attn]
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
@@ -491,7 +527,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {"attn": [attn], "inner_states": inner_states, "l_aux": l_aux}
+        return x, results
 
     def output_layer(self, features):
         """Project features to the vocabulary size."""

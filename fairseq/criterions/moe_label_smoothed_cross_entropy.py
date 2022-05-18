@@ -9,9 +9,10 @@ from typing import List, Optional
 
 import torch
 
-from fairseq import metrics, utils
+from fairseq import metrics, utils, distributed_utils
 from fairseq.criterions import FairseqCriterion, MoECriterionConfig, register_criterion
 from fairseq.modules.moe import MOELayer
+from fairseq.logging.meters import GroupedAverageMeter
 
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
@@ -60,6 +61,22 @@ class MoELabelSmoothedCrossEntropyCriterionConfig(MoECriterionConfig):
             "help": "Method of combining the gate loss from each MoE layers ('sum', 'average')"
         },
     )
+    clsr_gate_loss_p: Optional[float] = field(
+        default=1.0,
+        metadata={
+            "help": "In CLSR loss, encourages fraction of tokens p to be routed to MOE layers"
+        },
+    )
+    clsr_gate_loss_wt: Optional[float] = field(
+        default=0.0,
+        metadata={
+            "help": "Weight associated with CLSR loss in the weighted sum of CLSR, MoE gate loss, and cross entropy loss"
+        },
+    )
+    moe_clsr_xgpu: Optional[bool] = field(
+        default=False,
+        metadata={"help": "All2all across gpus when computing CLSR gate loss"},
+    )
 
 
 @register_criterion(
@@ -80,6 +97,7 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         "all_to_all_cpu_time_ms",  # CPU time spent in all to all calls in milliseconds
         "all_to_all_cuda_time_ms",  # CUDA ttime spent in all to all calls in milliseconds
         "median_prefix_count_expert1",
+        "clsr_lang_gates",
     ]
     secondary_moe_logging_keys = [
         "median_prefix_count_expert1_encoder",
@@ -99,14 +117,23 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         moe_gate_loss_combine_method,
         ignore_prefix_size=0,
         report_accuracy=False,
+        moe_clsr_xgpu=False,
+        clsr_gate_loss_p=1.0,
+        clsr_gate_loss_wt=0.0,
     ):
         super().__init__(task)
+        self.task = task
+        self.source_dictionary = getattr(task, "source_dictionary", None)
+        self.lang_idx = getattr(task, "lang_idx", None)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.gate_loss_weight = moe_gate_loss_wt
         self.gate_loss_combine_method = moe_gate_loss_combine_method
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+        self.moe_clsr_xgpu = moe_clsr_xgpu
+        self.clsr_gate_loss_p = clsr_gate_loss_p
+        self.clsr_gate_loss_weight = clsr_gate_loss_wt
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -119,7 +146,7 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         sample_size = (
             sample["target"].size(0) if self.sentence_avg else sample["ntokens"]
         )
-        loss, nll_loss, moe_loss, moe_metadata = self.compute_loss(
+        loss, nll_loss, moe_loss, clsr_loss, moe_metadata = self.compute_loss(
             model, net_output, sample, sample_size, reduce=reduce
         )
 
@@ -127,6 +154,7 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             "loss": loss.data,
             "nll_loss": nll_loss.data,
             "moe_loss": moe_loss.data,
+            "clsr_loss": clsr_loss.data,
             "ntokens": sample["ntokens"],
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
@@ -153,10 +181,39 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
     def compute_loss(self, model, net_output, sample, sample_size, reduce=True):
         gate_loss = 0.0
         gate_count = 0
-        for l_aux in net_output[1]["l_aux"]:
-            if l_aux is not None:
-                gate_loss += l_aux
+        for l_gate_loss in net_output[1]["moe_gate_loss"]:
+            if l_gate_loss is not None:
+                gate_loss += l_gate_loss
                 gate_count += 1
+
+        # avoid float16 overflow
+        clsr_gate_used_sum = torch.zeros_like(gate_loss, dtype=torch.float32)
+        clsr_gate_total_sum = torch.zeros_like(gate_loss, dtype=torch.float32)
+        for clsr_gate_used in net_output[1]["clsr_gate_loss_num"]:
+            if clsr_gate_used is not None:
+                clsr_gate_used_sum += clsr_gate_used
+        for clsr_gate_total in net_output[1]["clsr_gate_loss_denom"]:
+            if clsr_gate_total is not None:
+                clsr_gate_total_sum += clsr_gate_total
+
+        if self.moe_clsr_xgpu:
+            clsr_gate_used_sum = distributed_utils.all_reduce(
+                clsr_gate_used_sum,
+                group=distributed_utils.get_data_parallel_group(),
+                op="sum",
+            )
+            clsr_gate_total_sum = distributed_utils.all_reduce(
+                clsr_gate_total_sum,
+                group=distributed_utils.get_data_parallel_group(),
+                op="sum",
+            )
+
+        clsr_gate_loss = torch.zeros_like(gate_loss)
+        if self.clsr_gate_loss_weight > 0:
+            clsr_gate_loss = (
+                (clsr_gate_used_sum / clsr_gate_total_sum.clamp(1e-5))
+                - self.clsr_gate_loss_p
+            ).abs()
         if self.gate_loss_combine_method == "average":
             gate_loss = gate_loss / gate_count
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
@@ -168,8 +225,13 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             reduce=reduce,
         )
         gate_loss = sample_size * gate_loss
-        loss = ls_loss + self.gate_loss_weight * gate_loss
-        return loss, nll_loss, gate_loss, self.get_moe_metadata(model)
+        clsr_gate_loss = sample_size * clsr_gate_loss
+        loss = (
+            ls_loss
+            + self.gate_loss_weight * gate_loss
+            + self.clsr_gate_loss_weight * clsr_gate_loss
+        )
+        return loss, nll_loss, gate_loss, clsr_gate_loss, self.get_moe_metadata(model)
 
     def get_moe_metadata(self, model):
         moe_logging_output = {}
@@ -225,6 +287,8 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         loss_sum = sum(log.get("loss", 0) for log in logging_outputs)
         nll_loss_sum = sum(log.get("nll_loss", 0) for log in logging_outputs)
         moe_loss_sum = sum(log.get("moe_loss", 0) for log in logging_outputs)
+        # TODO: CLSR loss doesn't make sense during validation bc examples aren't random
+        clsr_loss_sum = sum(log.get("clsr_loss", 0) for log in logging_outputs)
 
         ntokens = sum(log.get("ntokens", 0) for log in logging_outputs)
         sample_size = sum(log.get("sample_size", 0) for log in logging_outputs)
@@ -238,7 +302,27 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         metrics.log_scalar(
             "moe_gate_loss", moe_loss_sum / sample_size, sample_size, round=8
         )
+        metrics.log_scalar(
+            "clsr_gate_loss", clsr_loss_sum / sample_size, sample_size, round=8
+        )
         batch_count = sum(log.get("batch_count", 0) for log in logging_outputs)
+
+        clsr_lang_gates = sum(log.get("clsr_lang_gates", 0) for log in logging_outputs)
+        if torch.is_tensor(clsr_lang_gates) and torch.numel(clsr_lang_gates) > 1:
+            lang_idx = None
+            for log in logging_outputs:
+                if log.get("lang_idx", None) is not None:
+                    lang_idx = log["lang_idx"]
+                    break
+            if lang_idx is None:
+                raise ValueError("logging outputs should contain lang_idx")
+            metrics.log_custom(
+                lambda: GroupedAverageMeter(["NONE"] + lang_idx, round=8),
+                "clsr_lang_gates_d",
+                clsr_lang_gates / batch_count,
+                batch_count,
+            )
+
         all_keys = (
             MoELabelSmoothedCrossEntropyCriterion.moe_logging_keys
             + MoELabelSmoothedCrossEntropyCriterion.secondary_moe_logging_keys

@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -23,6 +23,7 @@ from fairseq.modules.fused_bias_gelu import (
 from fairseq.modules.fused_bias_relu_squared import fused_bias_relu_squared
 from fairseq.modules.linear import Linear
 from fairseq.modules.moe import MOELayer, Top1Gate, Top2Gate
+from fairseq.modules.moe import CLSRLayer
 from fairseq.modules.quant_noise import quant_noise
 from fairseq.utils import relu_squared
 
@@ -100,7 +101,11 @@ class FeedForwardNetwork(nn.Module):
             init_model_on_gpu=init_model_on_gpu,
         )
         self.dropout_module = (
-            FairseqDropout(cfg.dropout, module_name=self.__class__.__name__)
+            FairseqDropout(
+                cfg.dropout,
+                module_name=self.__class__.__name__,
+                dropout_2d=cfg.dropout_2d,
+            )
             if not dropout_module
             else dropout_module
         )
@@ -150,9 +155,14 @@ class TransformerEncoderLayerBase(nn.Module):
         self.self_attn = self.build_self_attention(self.embed_dim, cfg)
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=self.__class__.__name__
+            cfg.dropout, module_name=self.__class__.__name__, dropout_2d=cfg.dropout_2d
         )
-        self.normalize_before = cfg.encoder.normalize_before
+        self.moe_dropout_module = FairseqDropout(
+            cfg.moe_dropout or cfg.dropout,
+            module_name=self.__class__.__name__,
+            dropout_2d=cfg.dropout_2d,
+        )
+        self.normalize_before = cfg.encoder_normalize_before
         self.is_moe_layer = is_moe_layer
         self.prefix_token_positions = (
             [0] if cfg.encoder_langtok in ["src", "tgt"] else None
@@ -165,7 +175,8 @@ class TransformerEncoderLayerBase(nn.Module):
         # the second condition is for a "pseudo" MoE layer
         # (shared FFN with expert FFN dimension) that tries
         # to replicate FLOPs used by an expert MoE layer with perfectly balanced load
-        if not self.is_moe_layer or cfg.alternate_ffn_embed_dim > 0:
+        build_moe = self.is_moe_layer and cfg.alternate_ffn_embed_dim == 0
+        if not build_moe or cfg.moe_clsr:
             self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
             activation_dropout_p = cfg.activation_dropout
             if activation_dropout_p == 0:
@@ -186,13 +197,20 @@ class TransformerEncoderLayerBase(nn.Module):
                 self.quant_noise,
                 self.quant_noise_block_size,
             )
-        else:
+        if build_moe:
+            lang_idx = None
+            if cfg.clsr_log_lang_gates:
+                lang_idx = getattr(cfg, "lang_idx", None)
+                assert lang_idx is not None, cfg
+
             if cfg.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
+                    moe_gate_drop=cfg.moe_gate_drop,
+                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                 )
             else:
@@ -204,16 +222,38 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
+                    cfg.moe_gate_drop,
+                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=cfg.init_model_on_gpu,
                 )
-            experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
+            experts = make_experts(
+                cfg, self.embed_dim, ffn_dim, self.moe_dropout_module
+            )
             self.moe_layer = MOELayer(
                 gate,
                 experts,
                 cfg,
                 max_positions=cfg.max_source_positions,
+                tok_dropout=cfg.moe_tok_dropout,
+                moe_only_dropout=cfg.moe_only_dropout,
             )
+            if cfg.moe_clsr:
+                self.clsr_layer = CLSRLayer(
+                    self.moe_layer,
+                    lambda x: _ffn(
+                        x,
+                        self.fc1,
+                        self.activation_fn,
+                        self.activation_dropout_module,
+                        self.fc2,
+                        self.dropout_module,
+                        ffn_ln=self.ffn_layernorm,
+                    )[0],
+                    self.embed_dim,
+                    cfg.clsr_gate_drop,
+                    lang_idx=lang_idx,
+                )
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
@@ -316,7 +356,7 @@ class TransformerEncoderLayerBase(nn.Module):
         encoder_padding_mask: Optional[Tensor],
         attn_mask: Optional[Tensor] = None,
         tokens: Optional[Tensor] = None,
-    ):
+    ) -> Tuple[Tensor, Optional[Dict[str, Tensor]]]:
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
@@ -363,7 +403,8 @@ class TransformerEncoderLayerBase(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.final_layer_norm(x)
-        if not self.is_moe_layer or self.cfg.alternate_ffn_embed_dim > 0:
+        run_moe = self.is_moe_layer and self.cfg.alternate_ffn_embed_dim == 0
+        if not run_moe:
             x, fc_result = _ffn(
                 x,
                 self.fc1,
@@ -375,6 +416,7 @@ class TransformerEncoderLayerBase(nn.Module):
             )
             l_aux = None
         else:
+            fc_result = None
             # x - seq_len, batch_size, model_dim
             x = x.transpose(0, 1)  # batch_size, seq_len, model_dim
             prefix_tokens = (
@@ -382,14 +424,18 @@ class TransformerEncoderLayerBase(nn.Module):
                 if tokens is not None and self.prefix_token_positions is not None
                 else None
             )
+            if self.cfg.moe_clsr:
+                moe_module = self.clsr_layer
+            else:
+                moe_module = self.moe_layer
             if self.cfg.use_moe_pad_mask:
-                x, l_aux = self.moe_layer(
+                x, l_aux = moe_module(
                     x,
                     input_padding_mask=encoder_padding_mask,
                     prefix_tokens=prefix_tokens,
                 )
             else:
-                x, l_aux = self.moe_layer(x, prefix_tokens=prefix_tokens)
+                x, l_aux = moe_module(x, prefix_tokens=prefix_tokens)
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -452,10 +498,18 @@ class TransformerDecoderLayerBase(nn.Module):
             load_megatron_fused_kernel()
 
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=self.__class__.__name__
+            cfg.dropout, module_name=self.__class__.__name__, dropout_2d=cfg.dropout_2d
         )
-        self.quant_noise = cfg.quant_noise.pq
-        self.quant_noise_block_size = cfg.quant_noise.pq_block_size
+        self.moe_dropout_module = FairseqDropout(
+            cfg.moe_dropout or cfg.dropout,
+            module_name=self.__class__.__name__,
+            dropout_2d=cfg.dropout_2d,
+        )
+        self.moe_dropout_module = FairseqDropout(
+            cfg.moe_dropout or cfg.dropout, module_name=self.__class__.__name__
+        )
+        self.quant_noise = cfg.quant_noise_pq
+        self.quant_noise_block_size = cfg.quant_noise_pq_block_size
 
         self.cross_self_attention = cfg.cross_self_attention
         self.attn_ln = LayerNorm(self.embed_dim) if cfg.scale_attn else None
@@ -515,7 +569,8 @@ class TransformerDecoderLayerBase(nn.Module):
             ffn_dim = cfg.alternate_decoder_ffn_embed_dim
 
         self.alpha2 = None
-        if not self.is_moe_layer or cfg.alternate_decoder_ffn_embed_dim > 0:
+        build_moe = self.is_moe_layer and cfg.alternate_decoder_ffn_embed_dim == 0
+        if not build_moe or cfg.moe_clsr:
             self.activation_fn = utils.get_activation_fn(
                 activation=str(cfg.activation_fn)
                 if cfg.activation_fn is not None
@@ -559,13 +614,20 @@ class TransformerDecoderLayerBase(nn.Module):
                 self.quant_noise_block_size,
                 init_model_on_gpu=init_model_on_gpu,
             )
-        else:
+        if build_moe:
+            lang_idx = None
+            if cfg.clsr_log_lang_gates:
+                lang_idx = getattr(cfg, "lang_idx")
+                assert lang_idx is not None, cfg
+
             if cfg.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
+                    moe_gate_drop=cfg.moe_gate_drop,
+                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=init_model_on_gpu,
                 )
@@ -578,16 +640,38 @@ class TransformerDecoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
+                    moe_gate_drop=cfg.moe_gate_drop,
+                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=init_model_on_gpu,
                 )
-            experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
+            experts = make_experts(
+                cfg, self.embed_dim, ffn_dim, self.moe_dropout_module
+            )
             self.moe_layer = MOELayer(
                 gate,
                 experts,
                 cfg,
                 max_positions=cfg.max_target_positions,
+                tok_dropout=cfg.moe_tok_dropout,
+                moe_only_dropout=cfg.moe_only_dropout,
             )
+            if cfg.moe_clsr:
+                self.clsr_layer = CLSRLayer(
+                    self.moe_layer,
+                    lambda x: _ffn(
+                        x,
+                        self.fc1,
+                        self.activation_fn,
+                        self.activation_dropout_module,
+                        self.fc2,
+                        self.dropout_module,
+                        ffn_ln=self.ffn_layernorm,
+                    )[0],
+                    self.embed_dim,
+                    cfg.clsr_gate_drop,
+                    lang_idx=lang_idx,
+                )
 
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         if init_model_on_gpu:
@@ -679,7 +763,9 @@ class TransformerDecoderLayerBase(nn.Module):
         need_attn: bool = False,
         need_head_weights: bool = False,
         tokens: Optional[Tensor] = None,
-    ):
+    ) -> Tuple[
+        Tensor, Tensor, Optional[List[Optional[Tensor]]], Optional[Dict[str, Tensor]]
+    ]:
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
@@ -808,14 +894,18 @@ class TransformerDecoderLayerBase(nn.Module):
                 if tokens is not None and self.prefix_token_positions is not None
                 else None
             )
+            if self.cfg.moe_clsr:
+                moe_module = self.clsr_layer
+            else:
+                moe_module = self.moe_layer
             if self.cfg.use_moe_pad_mask:
-                x, l_aux = self.moe_layer(
+                x, l_aux = moe_module(
                     x,
                     input_padding_mask=self_attn_padding_mask,
                     prefix_tokens=prefix_tokens,
                 )
             else:
-                x, l_aux = self.moe_layer(x, prefix_tokens=prefix_tokens)
+                x, l_aux = moe_module(x, prefix_tokens=prefix_tokens)
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         x = self.residual_connection(x, residual, alpha=self.alpha2)
         if not self.normalize_before:

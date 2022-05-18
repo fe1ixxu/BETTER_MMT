@@ -41,7 +41,7 @@ def copy_all_python_files(
     source,
     snapshot_main_dir,
     code_snapshot_hash,
-    recurse_dirs="fairseq,fairseq_cli,scripts",
+    recurse_dirs="fairseq,fairseq_cli,scripts,examples",
 ):
     """
     Copies following files from source to destination:
@@ -73,6 +73,32 @@ def copy_all_python_files(
     return destination
 
 
+def create_save_dir(args, save_dir, dry_run):
+    if args.skip_create_save_dir:
+        print(f"skipping create directory: {save_dir}")
+        return
+    elif os.path.exists(save_dir):
+        print(f"save_dir exists: {save_dir}")
+        return
+    else:
+        if not dry_run(f"create directory: {save_dir}"):
+            os.makedirs(save_dir)
+
+    # copy baseline model
+    # TODO: baseline_model won't work with RSC if launched from rsccpu
+    checkpoint_last = os.path.join(save_dir, "checkpoint_last.pt")
+    if (
+        args.baseline_model
+        and not os.path.exists(checkpoint_last)
+        and not dry_run(f"initialize with baseline model: {args.baseline_model}")
+    ):
+        if not os.path.exists(args.baseline_model):
+            raise FileNotFoundError(
+                f"Cannot find baseline model: {args.baseline_model}"
+            )
+        shutil.copyfile(args.baseline_model, checkpoint_last)
+
+
 def run_setup(args, config, dry_run):
     # compute save_dir
     save_dir_key = ".".join(
@@ -93,24 +119,19 @@ def run_setup(args, config, dry_run):
         save_dir = os.path.join(
             args.checkpoints_dir, f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}"
         )
+        log_dir = save_dir
+        if args.log_dir is not None:
+            log_dir = os.path.join(
+                args.log_dir, f"{args.prefix}.{save_dir_key}.ngpu{num_total_gpus}"
+            )
 
     # create save directory if it doesn't exist
-    if not os.path.exists(save_dir):
-        if not dry_run(f"create directory: {save_dir}"):
-            os.makedirs(save_dir)
+    create_save_dir(args, save_dir, dry_run)
 
-        # copy baseline model
-        checkpoint_last = os.path.join(save_dir, "checkpoint_last.pt")
-        if (
-            args.baseline_model
-            and not os.path.exists(checkpoint_last)
-            and not dry_run(f"initialize with baseline model: {args.baseline_model}")
-        ):
-            if not os.path.exists(args.baseline_model):
-                raise FileNotFoundError(
-                    f"Cannot find baseline model: {args.baseline_model}"
-                )
-            shutil.copyfile(args.baseline_model, checkpoint_last)
+    # create log directory if it doesn't exist
+    if not os.path.exists(log_dir):
+        if not dry_run(f"create log directory: {log_dir}"):
+            os.makedirs(log_dir)
 
     # create slurm log dir for job arrays
     if args.use_jobarray:
@@ -120,25 +141,25 @@ def run_setup(args, config, dry_run):
                 os.makedirs(slurm_dir)
         return save_dir_key, save_dir, slurm_dir
     else:
-        return save_dir_key, save_dir
+        return save_dir_key, save_dir, log_dir
 
 
-def is_job_valid(args, save_dir, dry_run):
+def is_job_valid(args, log_dir, dry_run):
     # check for whether the run failed
-    if has_finished(save_dir):
+    if has_finished(log_dir):
         if args.resume_finished:
-            dry_run(f"restart previously finished run: {save_dir}")
+            dry_run(f"restart previously finished run: {log_dir}")
         else:
-            print(f"skip finished run (override with --resume-finished): {save_dir}")
+            print(f"skip finished run (override with --resume-finished): {log_dir}")
             return False
-    elif has_failed(save_dir):
+    elif has_failed(log_dir):
         if args.resume_failed:
-            dry_run(f"resume failed run: {save_dir}")
+            dry_run(f"resume failed run: {log_dir}")
         else:
-            print(f"skip failed run (override with --resume-failed): {save_dir}")
+            print(f"skip failed run (override with --resume-failed): {log_dir}")
             return False
-    elif has_started(save_dir):
-        print(f"skip in progress run: {save_dir}")
+    elif has_started(log_dir):
+        print(f"skip in progress run: {log_dir}")
         return False
     return True
 
@@ -446,14 +467,13 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
 
         # postprocess hyperparams
         postprocess_hyperparams(args, config)
-
         if args.use_jobarray:
             save_dir_key, save_dir, slurm_dir = run_setup(args, config, dry_run)
         else:
-            save_dir_key, save_dir = run_setup(args, config, dry_run)
+            save_dir_key, save_dir, log_dir = run_setup(args, config, dry_run)
 
         # check if job failed, exists, finished
-        if not is_job_valid(args, save_dir, dry_run):
+        if not is_job_valid(args, log_dir, dry_run):
             continue
 
         # clone base env and update for this job, e.g., we set WANDB_RUN_ID
@@ -468,8 +488,8 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
         # post cmds
         post_cmds = gen_post_commands(args, save_dir)
 
-        train_log = os.path.join(save_dir, "train.log")
-        train_stderr = os.path.join(save_dir, "train.stderr.%j")  # %j = slurm job id
+        train_log = os.path.join(log_dir, "train.log")
+        train_stderr = os.path.join(log_dir, "train.stderr.%j")  # %j = slurm job id
         srun_cmd, srun_cmd_str = gen_srun_command_and_str(
             args, env, save_dir_key, train_log, train_stderr, train_cmd, post_cmds
         )
@@ -561,8 +581,8 @@ def launch_train(args, grid, grid_product, dry_run, postprocess_hyperparams):
                     print(stdout, file=train_log_h)
 
 
-def has_finished(save_dir):
-    train_log = os.path.join(save_dir, "train.log")
+def has_finished(log_dir):
+    train_log = os.path.join(log_dir, "train.log")
     if not os.path.exists(train_log):
         return False
     with open(train_log, "r") as h:
@@ -574,13 +594,13 @@ def has_finished(save_dir):
     return False
 
 
-def has_failed(save_dir):
-    if not os.path.exists(save_dir):
+def has_failed(log_dir):
+    if not os.path.exists(log_dir):
         return False
 
     # find max job id
     job_ids = []
-    for fn in os.listdir(save_dir):
+    for fn in os.listdir(log_dir):
         if fn.startswith("train.stderr."):
             job_ids.append(int(fn.split(".")[-1]))
     if len(job_ids) == 0:
@@ -595,11 +615,11 @@ def has_failed(save_dir):
                     return True
         return False
 
-    return _has_failed(os.path.join(save_dir, f"train.stderr.{max_job_id}"))
+    return _has_failed(os.path.join(log_dir, f"train.stderr.{max_job_id}"))
 
 
-def has_started(save_dir):
-    train_log = os.path.join(save_dir, "train.log")
+def has_started(log_dir):
+    train_log = os.path.join(log_dir, "train.log")
     if not os.path.exists(train_log):
         return False
     return True

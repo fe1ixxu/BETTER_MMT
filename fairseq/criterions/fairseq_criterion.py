@@ -210,7 +210,7 @@ class MoECriterion(FairseqCriterion):
         )
         gate_loss = 0.0
         gate_count = 0
-        for l_aux in net_output[1]["l_aux"]:
+        for l_aux in net_output[1]["moe_gate_loss"]:
             if l_aux is not None:
                 gate_loss += l_aux
                 gate_count += 1

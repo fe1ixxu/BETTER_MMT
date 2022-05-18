@@ -43,6 +43,20 @@ class TransformerLanguageModelConfig(FairseqDataclass):
     activation_dropout: float = field(
         default=0.0, metadata={"help": "dropout probability after activation in FFN."}
     )
+
+    moe_dropout: Optional[float] = field(
+        default=None, metadata={"help": "moe expert dropout probability"}
+    )
+    moe_tok_dropout: float = field(
+        default=0.0, metadata={"help": "MoE token-level dropout"}
+    )
+    moe_only_dropout: float = field(
+        default=0.0, metadata={"help": "extra unit-level dropout, MoE layer only"}
+    )
+    dropout_2d: float = field(default=0.0, metadata={"help": "2d dropout"})
+    emb_dropout_2d: float = field(
+        default=0.0, metadata={"help": "embedding 2d dropout"}
+    )
     relu_dropout: float = field(
         default=0.0, metadata={"help": "dropout probability after activation in FFN."}
     )
@@ -219,6 +233,18 @@ class TransformerLanguageModelConfig(FairseqDataclass):
             "help": "whether to normalize gate probs before or after dropping experts for capacity and randomization"
         },
     )
+    moe_gate_drop: float = field(
+        default=0.0,
+        metadata={"help": "Dropout probability for MOE gating"},
+    )
+    moe_gate_drop2: float = field(
+        default=0.0,
+        metadata={"help": "Dropout probability for MOE gating, option 2"},
+    )
+    moe_layerdrop_only: bool = field(
+        default=False,
+        metadata={"help": "Only drop MoE layers in layerdrop"},
+    )
     moe_expert_ffn_dim: Optional[int] = field(
         default=None, metadata={"help": "MoE expert FFN dimension"}
     )
@@ -265,12 +291,17 @@ class TransformerLanguageModelConfig(FairseqDataclass):
             "help": "if true orders token by the gate prob before capacity dropping."
         },
     )
-    use_stable_embedding: Optional[bool] = field(
+    moe_clsr: Optional[bool] = field(
+        default=False, metadata={"help": "If true enables CLSR gating"}
+    )
+    clsr_log_lang_gates: Optional[bool] = field(
         default=False,
         metadata={
-            "help": "Use bitsandbytes StableEmbeddingLayer which saves embedding state in fp32",
-            "argparse_alias": "--stable-emb",
+            "help": "whether to log per-lang fraction of tokens routed to MOE vs. CLSR"
         },
+    )
+    clsr_gate_drop: Optional[float] = field(
+        default=0.0, metadata={"help": "CLSR gate dropout rate"}
     )
     # NormFormer
     scale_fc: Optional[bool] = field(
@@ -295,6 +326,13 @@ class TransformerLanguageModelConfig(FairseqDataclass):
     scale_resids: Optional[bool] = field(
         default=False,
         metadata={"help": "Learn a scale coefficient for each residual connection"},
+    )
+    use_stable_embedding: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Use bitsandbytes StableEmbeddingLayer which saves embedding state in fp32",
+            "argparse_alias": "--stable-emb",
+        },
     )
     # options from other parts of the config
 

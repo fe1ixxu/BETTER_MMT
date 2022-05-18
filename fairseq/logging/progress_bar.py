@@ -114,6 +114,8 @@ def format_stat(stat):
         stat = "{:g}".format(round(stat.sum))
     elif torch.is_tensor(stat):
         stat = stat.tolist()
+    elif isinstance(stat, dict):
+        stat = {k: v.tolist() for k, v in stat.items()}
     return stat
 
 
@@ -387,6 +389,8 @@ class TensorboardProgressBarWrapper(BaseProgressBar):
                 writer.add_scalar(key, stats[key], step)
             elif torch.is_tensor(stats[key]) and stats[key].numel() == 1:
                 writer.add_scalar(key, stats[key].item(), step)
+            elif isinstance(stats[key], dict):
+                writer.add_scalars(key, stats[key], step)
         writer.flush()
 
 
