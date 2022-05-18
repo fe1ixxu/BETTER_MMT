@@ -776,6 +776,12 @@ class CheckpointConfig(FairseqDataclass):
             "help": "don't save optimizer-state as part of checkpoint when training is done"
         },
     )
+    synchronize_checkpoints_before_copy: bool = field(
+        default=False,
+        metadata={
+            "help": "Make sure all ranks are done saving checkpoints before copy/symlink"
+        },
+    )
     symlink_best_and_last_checkpoints: bool = field(
         default=False,
         metadata={

@@ -146,6 +146,9 @@ def save_checkpoint(
             async_callback_fn=async_callback_fn,
         )
 
+        if cfg.synchronize_checkpoints_before_copy:
+            torch.distributed.barrier()
+
         def copy_or_symlink(src, dest):
             if cfg.symlink_best_and_last_checkpoints:
                 PathManager.symlink(src, dest)
