@@ -35,6 +35,8 @@ class DatasetConfig:
     langs_file: str = MISSING
     lang_pairs: str = MISSING
     lang_pairs_file: str = MISSING
+    eval_lang_pairs: str = MISSING
+    eval_lang_pairs_file: str = MISSING
     data_prefix: tp.Dict[str, str] = MISSING
 
 
@@ -57,6 +59,9 @@ class TrainConfig:
     seed: int = MISSING
     arch: str = MISSING
     max_updates: int = MISSING
+    max_update_str: str = None
+    resume_finished: bool = False
+    synchronize_checkpoints_before_copy: bool = False
     validate_interval_updates: int = MISSING
     save_interval_updates: int = MISSING
     best_checkpoint_metric: str = MISSING
@@ -121,9 +126,12 @@ class TrainModule(NLLBModule):
     def launch_job(self):
         # values in cfg configurable through entire .yaml files in conf/cfg/
         cfg = self.config.cfg
-        log_dir_str = ""
-        if cfg.log_dir is not None:
-            log_dir_str = f"--log-dir {self.log_dir} --skip-create-save-dir"
+        log_dir_str = (
+            f"--log-dir {self.log_dir} --skip-create-save-dir" if cfg.log_dir else ""
+        )
+        max_update_str = (
+            f"--max-update-str {cfg.max_update_str}" if cfg.max_update_str else ""
+        )
 
         if cfg.dataset.langs is None:
             assert cfg.dataset.langs_file is not None
@@ -136,6 +144,13 @@ class TrainModule(NLLBModule):
             lang_pairs = os.path.join(cfg.fairseq_root, cfg.dataset.lang_pairs_file)
         else:
             lang_pairs = cfg.dataset.lang_pairs
+
+        if cfg.dataset.eval_lang_pairs is not None:
+            eval_lang_pairs = f"--eval-lang-pairs {cfg.dataset.eval_lang_pairs}"
+        elif cfg.dataset.eval_lang_pairs_file is not None:
+            eval_lang_pairs = f"--eval-lang-pairs {os.path.join(cfg.fairseq_root, cfg.dataset.eval_lang_pairs_file)}"
+        else:
+            eval_lang_pairs = ""
 
         tensorboard_dir = os.path.join(self.output_dir, "tb")
 
@@ -199,9 +214,13 @@ class TrainModule(NLLBModule):
                 --encoder-langtok {cfg.encoder_langtok} \
                 --langs {langs} \
                 --lang-pairs {lang_pairs} \
+                {eval_lang_pairs} \
                 --moe-eval-cap {cfg.moe_eval_cap} \
                 --ddp-backend {cfg.ddp_backend} \
                 --max-update {cfg.max_updates} \
+                {max_update_str} \
+                {"--resume-finished" if cfg.resume_finished else ""} \
+                {"--synchronize-checkpoints-before-copy" if cfg.synchronize_checkpoints_before_copy else ""} \
                 --max-tokens {cfg.max_tokens} \
                 --update-freq {cfg.update_freq} \
                 --warmup-updates {cfg.warmup} \

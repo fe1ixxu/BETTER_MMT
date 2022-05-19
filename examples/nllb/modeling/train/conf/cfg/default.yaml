@@ -12,6 +12,9 @@ train_prefix: "dense"
 seed: 2
 arch: "transformer_24_24"
 max_updates: 100000
+max_update_str: null
+resume_finished: false
+synchronize_checkpoints_before_copy: false
 validate_interval_updates: 20000
 save_interval_updates: 20000
 best_checkpoint_metric: "loss"
@@ -35,3 +38,4 @@ checkpoint_activations: false
 zero2: false
 ssl_task: null
 dae_mask: 0.5
+train_subset: train

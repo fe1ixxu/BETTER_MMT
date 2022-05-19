@@ -337,15 +337,6 @@ class TransformerConfig(FairseqDataclass):
     clsr_gate_drop: Optional[float] = field(
         default=0.0, metadata={"help": "CLSR gate dropout rate"}
     )
-    clsr_log_lang_gates: Optional[bool] = field(
-        default=False,
-        metadata={
-            "help": "whether to log per-lang fraction of tokens routed to MOE vs. CLSR"
-        },
-    )
-    clsr_gate_drop: Optional[float] = field(
-        default=0.0, metadata={"help": "CLSR gate dropout rate"}
-    )
 
     # NormFormer
     scale_fc: Optional[bool] = field(

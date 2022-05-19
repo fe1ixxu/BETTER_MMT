@@ -1,23 +1,15 @@
 defaults:
-  - cluster: rsc
-  - dataset: flores200.ablation.v4.2
-  - model_type: moe
-  - _self_
-
-fairseq_root: ???
-output_dir: ???
-log_dir: null
+  - default
+  - override cluster: rsc
+  - override dataset: flores200.ablation.v4.2
+  - override model_type: moe
 
 train_prefix: moe
-seed: 2
-arch: transformer_24_24
-max_updates: 100000
 validate_interval_updates: 10000
 save_interval_updates: 5000
 best_checkpoint_metric: "ppl"
 encoder_langtok: src
 ddp_backend: fully_sharded
-fp16: true
 lr: 0.004
 warmup: 8000
 max_tokens: 4096
@@ -26,11 +18,4 @@ num_nodes: 8
 num_gpus_per_node: 8
 temp: 1
 dropout: 0
-module_name: examples.nllb.modeling.sweep.sweep_mmt
-num_trials: 1
 max_time_mins: 8000
-mem: 0
-moe_eval_cap: 1.0
-checkpoint_activations: false
-zero2: false
-train_subset: train

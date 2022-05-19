@@ -482,6 +482,12 @@ class MultilingualDatasetManager(object):
             help="For mixed multitask (mono_mixed_task), monolingual sentences are"
             "used as denoising (mBART) examples with prob p and LM with prob (1-p)",
         )
+        parser.add_argument(
+            "--eval-lang-pairs",
+            default=None,
+            help="comma-separated list of evaluation language pairs: en-de,en-fr,de-fr",
+            action=FileContentsAction,
+        )
 
     @classmethod
     def load_langs(cls, args, **kwargs):
@@ -1792,10 +1798,16 @@ class MultilingualDatasetManager(object):
             )
         else:
             splits = [split]
+            eval_lang_pairs = getattr(self.args, "eval_lang_pairs", None)
             for dataset_name, dataset in datasets:
                 split_name = split + "_" + dataset_name
                 output_datasets[split_name] = dataset
-                splits.append(split_name)
+                if (
+                    eval_lang_pairs is None
+                    or dataset_name.split(":")[1] in eval_lang_pairs
+                ):
+                    splits.append(split_name)
+            logger.info(f"splits={splits}")
             if split in self.args.valid_subset:
                 self.args.valid_subset = self.args.valid_subset.replace(
                     split, ",".join(splits)
@@ -1828,10 +1840,16 @@ class MultilingualDatasetManager(object):
             )
         else:
             splits = [split]
+            eval_lang_pairs = getattr(self.args, "eval_lang_pairs", None)
             for dataset_name, dataset in datasets:
                 split_name = split + "_" + dataset_name
                 output_datasets[split_name] = dataset
-                splits.append(split_name)
+                if (
+                    eval_lang_pairs is None
+                    or dataset_name.split(":")[1] in eval_lang_pairs
+                ):
+                    splits.append(split_name)
+            logger.info(f"splits={splits}")
             if split in self.args.valid_subset:
                 self.args.valid_subset = self.args.valid_subset.replace(
                     split, ",".join(splits)

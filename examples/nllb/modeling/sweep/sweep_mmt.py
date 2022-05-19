@@ -126,6 +126,9 @@ def add_extra_options_func(parser):
     parser.add_argument("--langtoks", default=None)
     parser.add_argument("--max-update", help="max update", default=40000)
     parser.add_argument(
+        "--max-update-str", help="override mu\{val\} string", default=None
+    )
+    parser.add_argument(
         "--finetune-from-model",
         help="finetune from a pretrained model",
         type=str,
@@ -178,7 +181,7 @@ def add_extra_options_func(parser):
     # per token learning should be approximately constant;
     # ideally momentent and 2nd momentent of adam should be adjusted accordingly but less important
     parser.add_argument("--lr", default=10e-4)
-    parser.add_argument("--dropout", default=0.1)
+    parser.add_argument("--dropout", default=0.0)
     parser.add_argument(
         "--ddp-backend",
         default=None,
@@ -223,6 +226,9 @@ def add_extra_options_func(parser):
         type=int,
         default=20000,
         help="Number of training updates per validation run.",
+    )
+    parser.add_argument(
+        "--synchronize-checkpoints-before-copy", default=False, action="store_true"
     )
     parser.add_argument(
         "--share-all-embeddings",
@@ -301,6 +307,12 @@ def add_extra_options_func(parser):
         help="If True, validate over all training pairs xx-yy, given en-xx or xx-en"
         "and en-yy or yy-en valid files are available.",
     )
+    parser.add_argument(
+        "--eval-lang-pairs",
+        help="lang pairs for multilingual training",
+        type=str,
+        default=None,
+    )
 
     parser.add_argument(
         "--add-data-source-prefix-tags",
@@ -310,7 +322,7 @@ def add_extra_options_func(parser):
     )
 
     parser.add_argument("--moe-gt-drp", type=float, default=0.0)
-    parser.add_argument("--moe-tok-drp", type=float, default=0.1)
+    parser.add_argument("--moe-tok-drp", type=float, default=0.0)
     parser.add_argument("--all-tok-drp", type=float, default=0.0)
     parser.add_argument("--moe-unit-drp", type=float, default=0.0)
     parser.add_argument("--moe-clsr", action="store_true", default=0.0)
@@ -331,7 +343,9 @@ def get_grid(args):
         # hyperparam("--fp16-no-flatten-grads"),
         # TODO: verify these values
         hyperparam(
-            "--max-update", [args.max_update], save_dir_key=lambda val: f"mu{val}"
+            "--max-update",
+            [args.max_update],
+            save_dir_key=lambda val: args.max_update_str or f"mu{val}",
         ),
         hyperparam(
             "--update-freq", [args.update_freq], save_dir_key=lambda val: f"uf{val}"
@@ -494,22 +508,6 @@ def get_grid(args):
                 hyperparam("--moe-normalize-expert-grad", ["sqrt_world_size"]),
                 # gradient explosion issues encountered with Tutel MoE
                 # hyperparam("--use-tutel-moe"),
-                # hyperparam("--moe-dropout", [0.1], save_dir_key=lambda val: f"moe_exdrp{val}"),
-                # hyperparam("--moe-gate-lang-only", binary_flag=True, save_dir_key=lambda x: "moe_gtlang"),
-                # hyperparam("--moe-gate-drop", [0.1], save_dir_key=lambda val: f"moe_drp{val}"),
-                # hyperparam("--moe-gate-drop2", [0.1], save_dir_key=lambda val: f"moe_drp2{val}"),
-                # hyperparam("--moe-tok-dropout", [0.2], save_dir_key=lambda val: f"moe_tok_drp{val}"),
-                # hyperparam("--dropout-2d", [0.1], save_dir_key=lambda val: f"drop2d{val}"),
-                # hyperparam("--moe-only-dropout", [0.1], save_dir_key=lambda val: f"moe_unit_drp{val}"),
-                # hyperparam("--use-local-prob", [0.1], save_dir_key=lambda val: f"moe_local_drp{val}"),
-                # hyperparam("--moe-clsr", save_dir_key=lambda val: f"clsr{val}"),
-                # hyperparam("--clsr-gate-loss-wt", [0.1], save_dir_key=lambda val: f"c_wt{val}"),
-                # hyperparam("--clsr-gate-loss-p", [0.8], save_dir_key=lambda val: f"c_p{val}"),
-                # hyperparam("--clsr-gate-drop", [0.1], save_dir_key=lambda val: f"c_drp{val}"),
-                # hyperparam("--clsr-gate-drop-scale", binary_flag=True, save_dir_key=lambda x: "c_scl"),
-                # hyperparam("--clsr-log-lang-gates"),
-                # hyperparam("--moe-clsr-xgpu", save_dir_key=lambda val: f"xgpu{val}"),
-                # hyperparam("--moe-hier-l", "4,4", save_dir_key=lambda val: f"hmoe{val}"),
             ]
         )
         if args.moe_gt_drp > 0:  # row 4
@@ -570,6 +568,10 @@ def get_grid(args):
                         save_dir_key=lambda val: f"c_drp{val}",
                     )
                 )
+        if args.synchronize_checkpoints_before_copy:
+            grids.append(hyperparam("--synchronize-checkpoints-before-copy"))
+        if args.eval_lang_pairs is not None:
+            grids.append(hyperparam("--eval-lang-pairs", args.eval_lang_pairs))
 
         if args.moe_eval_cap > 0.25:
             grids.append(hyperparam("--max-tokens-valid", 1024))
@@ -907,6 +909,45 @@ def get_transformer_24_24_grid():
         hyperparam("--decoder-normalize-before", True, binary_flag=True),
         hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"AD{val}"),
         hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RD{val}"),
+    ]
+
+
+@register_grid("transformer_24_24_big")
+def get_transformer_24_24_big_grid():
+    return [
+        hyperparam("--arch", "transformer", save_dir_key=lambda val: val),
+        hyperparam(
+            "--share-all-embeddings",
+            True,
+            binary_flag=True,
+            save_dir_key=lambda val: "shem",
+        ),
+        hyperparam("--encoder-layers", 24, save_dir_key=lambda val: f"ELS{val}"),
+        hyperparam("--decoder-layers", 24, save_dir_key=lambda val: f"DLS{val}"),
+        # this is a multiplier of embed dim
+        hyperparam(
+            "--encoder-ffn-embed-dim",
+            8 * 1024,
+            save_dir_key=lambda val: f"encffnx{val}",
+        ),
+        hyperparam(
+            "--decoder-ffn-embed-dim",
+            8 * 1024,
+            save_dir_key=lambda val: f"decffnx{val}",
+        ),
+        hyperparam("--encoder-embed-dim", 2048, save_dir_key=lambda val: f"E{val}"),
+        hyperparam("--decoder-embed-dim", 2048),
+        hyperparam("--encoder-attention-heads", 16, save_dir_key=lambda val: f"H{val}"),
+        hyperparam("--decoder-attention-heads", 16),
+        hyperparam(
+            "--encoder-normalize-before",
+            True,
+            binary_flag=True,
+            save_dir_key=lambda _: "NBF",
+        ),
+        hyperparam("--decoder-normalize-before", True, binary_flag=True),
+        hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"ATTDRP{val}"),
+        hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RELDRP{val}"),
     ]
 
 
