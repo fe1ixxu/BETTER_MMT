@@ -227,7 +227,6 @@ class TransformerEncoderBase(FairseqEncoder):
             .reshape(-1, 1)
             .contiguous()
         )
-
         results = {
             "encoder_padding_mask": [encoder_padding_mask],  # B x T
             "encoder_embedding": [encoder_embedding],  # B x T x C

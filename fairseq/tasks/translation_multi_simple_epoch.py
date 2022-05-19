@@ -21,7 +21,7 @@ from fairseq.data import (
 from fairseq.data.multilingual.multilingual_data_manager import (
     MultilingualDatasetManager,
 )
-from fairseq.data.multilingual.multilingual_utils import get_lang_tok, LangTokStyle
+from fairseq.data.multilingual.multilingual_utils import LangTokStyle, get_lang_tok
 from fairseq.data.multilingual.sampling_method import SamplingMethod
 from fairseq.tasks import LegacyFairseqTask, register_task
 from fairseq.utils import FileContentsAction
@@ -213,7 +213,7 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
                 tgt_langtok_spec=tgt_langtok_spec,
             )
         else:
-            dataset.src = self.data_manager.src_dataset_tranform_func(
+            dataset.src = self.data_manager.src_dataset_transform_func(
                 self.args.source_lang,
                 self.args.target_lang,
                 dataset=dataset.src,
@@ -338,7 +338,7 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
                 logger.info(f"mem usage: {data_utils.get_mem_usage()}")
 
                 # filter examples that are too large
-                if max_positions is not None and split is not None and "train" in split:
+                if max_positions is not None and split is not None:
                     my_time = time.time()
                     indices = self.filter_indices_by_size(
                         indices, dataset, max_positions, ignore_invalid_inputs

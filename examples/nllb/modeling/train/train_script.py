@@ -79,6 +79,8 @@ class TrainConfig:
     checkpoint_activations: bool = False
     zero2: bool = False
     train_subset: str = "train"
+    ssl_task: str = None
+    dae_mask: float = 0.3
 
 
 @dataclass
@@ -150,6 +152,33 @@ class TrainModule(NLLBModule):
             )
         else:
             moe_params = ""
+
+        ssl_params = ""
+        if getattr(cfg, "ssl_task", None):
+            assert getattr(cfg.dataset, "mono_num_shards", None) is not None
+            assert getattr(cfg.dataset, "mono_data_prefix", None) is not None
+            assert getattr(cfg.dataset, "mono_langs", None) is not None
+
+            cluster_name = cfg.cluster.cluster_name
+            assert cluster_name in cfg.dataset.mono_data_prefix
+            mono_data_prefix = cfg.dataset.mono_data_prefix[cluster_name]
+
+            mono_data_dir = ""
+            for shard_id in range(cfg.dataset.mono_num_shards):
+                mono_data_dir += f":{mono_data_prefix}/shard{shard_id:03d}"
+            mono_data_dir = mono_data_dir[1:]  # remove leading colon
+            print("mono_data_dir: ", mono_data_dir)
+            mono_langs = cfg.dataset.mono_langs
+
+            dae_mask = getattr(cfg, "dae_mask", 0.3)
+            ssl_params = f"""--extra-data "{{'{cfg.ssl_task}': '{mono_data_dir}'}}" \
+                --extra-lang-pairs "{{'{cfg.ssl_task}': '{mono_langs}'}}" \
+                --langtoks "{{'{cfg.ssl_task}': ('src', 'tgt')}}"  \
+                --mask-length span-poisson \
+                --mask {dae_mask} \
+                --mask-random 0.1 \
+                --poisson-lambda 3.5"""
+
         sweep_command = f"""
             cd {cfg.fairseq_root}
             python -m {cfg.module_name} \
@@ -189,9 +218,12 @@ class TrainModule(NLLBModule):
                 --train-subset {cfg.train_subset} \
                 --snapshot-code \
                 --use-local-shard-size \
+                --enable-m2m-validation \
+                --add-data-source-prefix-tags \
                 {checkpoint_activations_param} \
                 {zero2_param} \
-                {moe_params}
+                {moe_params} \
+                {ssl_params}
         """
 
         print("RUNNING SWEEP COMMAND:")

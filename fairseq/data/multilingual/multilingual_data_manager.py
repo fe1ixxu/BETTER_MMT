@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import argparse
 import itertools
 import json
 import logging
@@ -11,21 +12,30 @@ import os
 from argparse import ArgumentError
 from collections import OrderedDict, defaultdict
 
+import numpy as np
+import torch
+
 from fairseq import utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
+    DenoisingLangPairDataset,
     Dictionary,
+    FairseqDataset,
     LanguagePairDataset,
+    LMLangPairDataset,
+    MixedDenoisingLMLangPairDataset,
     PrependTokenDataset,
     SampledMultiDataset,
     SampledMultiEpochDataset,
     StripTokenDataset,
+    TokenBlockDataset,
     TransformEosLangPairDataset,
     TruncateDataset,
     data_utils,
     indexed_dataset,
 )
+from fairseq.data.encoders.utils import get_whole_word_mask
 from fairseq.data.multilingual.multilingual_utils import (
     DATA_SOURCE_PREFIX_TAGS,
     EncoderLangtok,
@@ -48,6 +58,8 @@ logger = logging.getLogger(__name__)
 SRC_DICT_NAME = "src"
 TGT_DICT_NAME = "tgt"
 
+MONOLINGUAL_DATA_CATEGORIES = ("mono_dae", "mono_lm")
+
 
 def _lang_id(dic: Dictionary, lang: str):
     """Return language ID index."""
@@ -62,6 +74,51 @@ def load_sampling_weights(from_file):
     return weights
 
 
+def prepend_langtok(langtok, tensor):
+    ret = tensor.new_zeros(1 + len(tensor))
+    # insert after bos:
+    ret[0] = langtok
+    ret[1:] = tensor[0:]
+    return ret
+
+
+class AddTaskAndLangToksTransform(object):
+    def __init__(self, task_tok, src_langtok, tgt_langtok):
+        super().__init__()
+        self.task_tok = task_tok
+        self.src_langtok = src_langtok
+        self.tgt_langtok = tgt_langtok
+
+    def __call__(self, source, target):
+        if self.src_langtok:
+            source = prepend_langtok(self.src_langtok, source)
+        if self.tgt_langtok:
+            target = prepend_langtok(self.tgt_langtok, target)
+        if self.task_tok is not None:
+            source = prepend_langtok(self.task_tok, source)
+            target = prepend_langtok(self.task_tok, target)
+        return source, target
+
+
+class AddLangToksTransform(object):
+    def __init__(self, src_langtok, tgt_langtok, task_tok=None):
+        super().__init__()
+        self.src_langtok = src_langtok
+        self.tgt_langtok = tgt_langtok
+        self.task_tok = task_tok
+
+    def __call__(self, source, target):
+        if self.src_langtok:
+            source = prepend_langtok(self.src_langtok, source)
+            if self.task_tok is not None:
+                source = prepend_langtok(self.task_tok, source)
+        if self.tgt_langtok:
+            target = prepend_langtok(self.tgt_langtok, target)
+            if self.task_tok is not None:
+                target = prepend_langtok(self.task_tok, target)
+        return source, target
+
+
 class MultilingualDatasetManager(object):
     def __init__(self, args, lang_pairs, langs, dicts, sampling_method):
         super().__init__()
@@ -73,11 +130,11 @@ class MultilingualDatasetManager(object):
             if args.extra_lang_pairs
             else []
         )
-        self.src_langs = {
-            p.split("-")[0] for p in args.lang_pairs + self.extra_lang_pairs
+        self.src_langs = {p.split("-")[0] for p in args.lang_pairs} | {
+            p for p in self.extra_lang_pairs
         }
-        self.tgt_langs = {
-            p.split("-")[1] for p in args.lang_pairs + self.extra_lang_pairs
+        self.tgt_langs = {p.split("-")[1] for p in args.lang_pairs} | {
+            p for p in self.extra_lang_pairs
         }
         self.langs = langs
         self.dicts = dicts
@@ -102,6 +159,7 @@ class MultilingualDatasetManager(object):
                 "Using local training dataset sizes of the current shard for sampling distribution"
             )
         self.enable_m2m_validation = getattr(args, "enable_m2m_validation", False)
+        self.add_ssl_task_tokens = getattr(args, "add_ssl_task_tokens", False)
 
     @classmethod
     def setup_data_manager(cls, args, lang_pairs, langs, dicts, sampling_method):
@@ -323,6 +381,107 @@ class MultilingualDatasetManager(object):
             action="store_true",
             help="Add mined, mmt_bt and smt_bt tags to the dictionary",
         )
+        parser.add_argument(
+            "--add-ssl-task-tokens",
+            default=False,
+            action="store_true",
+            help="Add task tokens for ssl tasks",
+        )
+        # denoising options
+        parser.add_argument(
+            "--tokens-per-sample",
+            default=512,
+            type=int,
+            help="max number of total tokens over all segments"
+            " per sample for dataset",
+        )
+        parser.add_argument(
+            "--sample-break-mode",
+            default="eos",
+            type=str,
+            help="mode for breaking sentence",
+        )
+        try:
+            parser.add_argument(
+                "--mask",
+                default=0.1,
+                type=float,
+                help="fraction of words/subwords that will be masked",
+            )
+        except argparse.ArgumentError:
+            pass
+        try:
+            parser.add_argument(
+                "--mask-random",
+                default=0.0,
+                type=float,
+                help="instead of using [MASK], use random token this often",
+            )
+        except argparse.ArgumentError:
+            pass
+        parser.add_argument(
+            "--insert",
+            default=0.0,
+            type=float,
+            help="insert this percentage of additional random tokens",
+        )
+        parser.add_argument(
+            "--permute",
+            default=0.0,
+            type=float,
+            help="take this proportion of subwords and permute them",
+        )
+        parser.add_argument(
+            "--rotate",
+            default=0.0,
+            type=float,
+            help="rotate this proportion of inputs",
+        )
+        try:
+            parser.add_argument(
+                "--poisson-lambda",
+                default=3.0,
+                type=float,
+                help="randomly shuffle sentences for this proportion of inputs",
+            )
+        except argparse.ArgumentError:
+            pass
+        parser.add_argument(
+            "--permute-sentences",
+            default=0.0,
+            type=float,
+            help="shuffle this proportion of sentences in all inputs",
+        )
+        try:
+            parser.add_argument(
+                "--mask-length",
+                default="subword",
+                type=str,
+                choices=["subword", "word", "span-poisson"],
+                help="mask length to choose",
+            )
+        except argparse.ArgumentError:
+            pass
+        parser.add_argument(
+            "--replace-length",
+            default=1,
+            type=int,
+            help="when masking N tokens, replace with 0, 1, or N tokens (use -1 for N)",
+        )
+        parser.add_argument(
+            "--ignore-mmt-main-data",
+            default=False,
+            action="store_true",
+            help="ignore the main MMT data (e.g. during self-supervised pretraining)."
+            + "This is a hack to do denoising pretraining within the same task",
+        )
+        parser.add_argument(
+            "--mixed-multitask-denoising-prob",
+            default=0.5,
+            type=float,
+            help="For mixed multitask (mono_mixed_task), monolingual sentences are"
+            "used as denoising (mBART) examples with prob p and LM with prob (1-p)",
+        )
 
     @classmethod
     def load_langs(cls, args, **kwargs):
@@ -362,9 +521,13 @@ class MultilingualDatasetManager(object):
         )
 
     def _shared_collater(self):
-        return not (self.args.extra_data and "mono_dae" in self.args.extra_data) and (
-            not self.args.lang_tok_replacing_bos_eos
-        )
+        return not (
+            self.args.extra_data
+            and any(
+                category in self.args.extra_data
+                for category in MONOLINGUAL_DATA_CATEGORIES
+            )
+        ) and (not self.args.lang_tok_replacing_bos_eos)
 
     def estimate_global_pass_epoch(self, epoch):
         if self.args.virtual_epoch_size is None or self.args.virtual_data_size is None:
@@ -431,6 +594,7 @@ class MultilingualDatasetManager(object):
                 langtoks_specs=args.langtoks_specs,
                 extra_data=args.extra_data,
                 add_data_source_prefix_tags=args.add_data_source_prefix_tags,
+                add_ssl_task_tokens=args.add_ssl_task_tokens,
             )
             return d
 
@@ -456,10 +620,11 @@ class MultilingualDatasetManager(object):
                 else []
             )
             src_langs_to_load_dicts = sorted(
-                {p.split("-")[0] for p in (args.lang_pairs + extra_lang_pairs)}
+                [p.split("-")[0] for p in args.lang_pairs]
+                + [p for p in extra_lang_pairs]
             )
             tgt_langs_to_load_dicts = sorted(
-                {p.split("-")[1] for p in (args.lang_pairs + extra_lang_pairs)}
+                {p.split("-")[1] for p in (args.lang_pairs)}
             )
         else:
             src_langs_to_load_dicts = [args.source_lang]
@@ -473,12 +638,12 @@ class MultilingualDatasetManager(object):
                 dicts[lang] = load_dictionary(
                     os.path.join(paths[0], "dict.{}.txt".format(lang))
                 )
+                logger.info("[{}] dictionary: {} types".format(lang, len(dicts[lang])))
             if len(dicts) > 0:
                 dict0 = next(iter(dicts.values()))
                 assert dicts[lang].pad() == dict0.pad()
                 assert dicts[lang].eos() == dict0.eos()
                 assert dicts[lang].unk() == dict0.unk()
-            logger.info("[{}] dictionary: {} types".format(lang, len(dicts[lang])))
 
         if args.fixed_dictionary is not None:
             fixed_dict = load_dictionary(args.fixed_dictionary)
@@ -551,6 +716,14 @@ class MultilingualDatasetManager(object):
             lang=tgt_lang, lang_tok_style=self.args.lang_tok_style, spec=spec
         )
         return self.get_langtok_index(langtok, self.get_target_dictionary(tgt_lang))
+
+    def get_lm_tok(self, src_lang, spec=None):
+        langtok = "__lm__"
+        return self.get_langtok_index(langtok, self.get_source_dictionary(src_lang))
+
+    def get_dae_tok(self, src_lang, spec=None):
+        langtok = "__dae__"
+        return self.get_langtok_index(langtok, self.get_source_dictionary(src_lang))
 
     @classmethod
     def load_data(cls, path, vdict, impl):
@@ -745,6 +918,228 @@ class MultilingualDatasetManager(object):
 
         return src_dataset, tgt_dataset, align_dataset
 
+    def load_denoise_langpair_dataset(
+        self,
+        data_path,
+        split,
+        src,
+        src_dict,
+        tgt,
+        tgt_dict,
+        combine,
+        dataset_impl,
+        upsample_primary,
+        left_pad_source,
+        left_pad_target,
+        max_source_positions,
+        max_target_positions,
+        prepend_bos=False,
+        load_alignments=False,
+        truncate_source=False,
+        src_dataset_transform_func=lambda dataset: dataset,
+        tgt_dataset_transform_func=lambda dataset: dataset,
+        src_lang_id=None,
+        tgt_lang_id=None,
+        src_langtok=None,
+        tgt_langtok=None,
+    ):
+        mono_lang = tgt
+        mono_dict = tgt_dict
+        prefix = os.path.join(data_path, f"train.{mono_lang}.{mono_lang}")
+        mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        if mono_dataset is None:
+            # alternate naming convention: {mono_lang}-{mono_lang}.{mono_lang}
+            prefix = os.path.join(
+                data_path, f"train.{mono_lang}-{mono_lang}.{mono_lang}"
+            )
+            mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        logger.info(f"{data_path} mono data {mono_lang} {len(mono_dataset)} examples")
+        mask_whole_words = get_whole_word_mask(self.args, mono_dict)
+
+        # create continuous blocks of tokens
+        dataset = TokenBlockDataset(
+            mono_dataset,
+            mono_dataset.sizes,
+            self.args.tokens_per_sample - 2,  # one less for <s>
+            pad=mono_dict.pad(),
+            eos=mono_dict.eos(),
+            break_mode=self.args.sample_break_mode,
+        )
+        logger.info(f"| loaded {len(dataset)} blocks from: {prefix}")
+
+        # Convert from monolingual size to lang-pair size (add 1 because of lang token)
+        sizes = np.array([(s + 1, s + 1) for s in dataset.sizes])
+
+        dae_tok = None
+        if self.add_ssl_task_tokens:
+            dae_tok = self.get_dae_tok(src)
+
+        denoising_dataset = DenoisingLangPairDataset(
+            dataset,
+            sizes,
+            mono_dict,
+            mono_dict.index("<mask>"),
+            mask_whole_words,
+            shuffle=self.args.shuffle_instance,
+            seed=self.seed,
+            args=self.args,
+            item_transform_func=AddTaskAndLangToksTransform(
+                dae_tok, src_langtok, tgt_langtok
+            ),
+        )
+
+        return denoising_dataset
+
+    def load_lm_langpair_dataset(
+        self,
+        data_path,
+        split,
+        src,
+        src_dict,
+        tgt,
+        tgt_dict,
+        combine,
+        dataset_impl,
+        upsample_primary,
+        left_pad_source,
+        left_pad_target,
+        max_source_positions,
+        max_target_positions,
+        prepend_bos=False,
+        load_alignments=False,
+        truncate_source=False,
+        src_dataset_transform_func=lambda dataset: dataset,
+        tgt_dataset_transform_func=lambda dataset: dataset,
+        src_lang_id=None,
+        tgt_lang_id=None,
+        src_langtok=None,
+        tgt_langtok=None,
+    ):
+        mono_lang = tgt
+        mono_dict = tgt_dict
+        prefix = os.path.join(data_path, f"train.{mono_lang}.{mono_lang}")
+        mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        if mono_dataset is None:
+            # alternate naming convention: {mono_lang}-{mono_lang}.{mono_lang}
+            prefix = os.path.join(
+                data_path, f"train.{mono_lang}-{mono_lang}.{mono_lang}"
+            )
+            mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        logger.info(f"{data_path} mono data {mono_lang} {len(mono_dataset)} examples")
+        mask_whole_words = get_whole_word_mask(self.args, mono_dict)
+
+        # create continuous blocks of tokens
+        dataset = TokenBlockDataset(
+            mono_dataset,
+            mono_dataset.sizes,
+            self.args.tokens_per_sample - 2,  # one less for <s>
+            pad=mono_dict.pad(),
+            eos=mono_dict.eos(),
+            break_mode=self.args.sample_break_mode,
+        )
+        logger.info(f"| loaded {len(dataset)} blocks from: {prefix}")
+
+        # Convert from monolingual size to lang-pair size (add 1 because of lang token)
+        sizes = np.array([(s + 1, s + 1) for s in dataset.sizes])
+
+        lm_tok = None
+        if self.add_ssl_task_tokens:
+            lm_tok = self.get_lm_tok(src)
+
+        lm_dataset = LMLangPairDataset(
+            dataset,
+            sizes,
+            mono_dict,
+            mono_dict.index("<mask>"),
+            mask_whole_words,
+            shuffle=self.args.shuffle_instance,
+            seed=self.seed,
+            args=self.args,
+            item_transform_func=AddTaskAndLangToksTransform(
+                lm_tok, src_langtok, tgt_langtok
+            ),
+        )
+
+        return lm_dataset
+
+    def load_mixed_task_langpair_dataset(
+        self,
+        data_path,
+        split,
+        src,
+        src_dict,
+        tgt,
+        tgt_dict,
+        combine,
+        dataset_impl,
+        upsample_primary,
+        left_pad_source,
+        left_pad_target,
+        max_source_positions,
+        max_target_positions,
+        prepend_bos=False,
+        load_alignments=False,
+        truncate_source=False,
+        src_dataset_transform_func=lambda dataset: dataset,
+        tgt_dataset_transform_func=lambda dataset: dataset,
+        src_lang_id=None,
+        tgt_lang_id=None,
+        src_langtok=None,
+        tgt_langtok=None,
+    ):
+        mono_lang = tgt
+        mono_dict = tgt_dict
+        prefix = os.path.join(data_path, f"train.{mono_lang}.{mono_lang}")
+        mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        if mono_dataset is None:
+            # alternate naming convention: {mono_lang}-{mono_lang}.{mono_lang}
+            prefix = os.path.join(
+                data_path, f"train.{mono_lang}-{mono_lang}.{mono_lang}"
+            )
+            mono_dataset = self.load_data(prefix, mono_dict, dataset_impl)
+        logger.info(f"{data_path} mono data {mono_lang} {len(mono_dataset)} examples")
+        mask_whole_words = get_whole_word_mask(self.args, mono_dict)
+
+        # create continuous blocks of tokens
+        dataset = TokenBlockDataset(
+            mono_dataset,
+            mono_dataset.sizes,
+            self.args.tokens_per_sample - 2,  # one less for <s>
+            pad=mono_dict.pad(),
+            eos=mono_dict.eos(),
+            break_mode=self.args.sample_break_mode,
+        )
+        logger.info(f"| loaded {len(dataset)} blocks from: {prefix}")
+
+        # Convert from monolingual size to lang-pair size (add 1 because of lang token)
+        sizes = np.array([(s + 1, s + 1) for s in dataset.sizes])
+
+        lm_tok = None
+        dae_tok = None
+        if self.add_ssl_task_tokens:
+            lm_tok = self.get_lm_tok(src)
+            dae_tok = self.get_dae_tok(src)
+
+        combined_dataset = MixedDenoisingLMLangPairDataset(
+            dataset,
+            sizes,
+            mono_dict,
+            mono_dict.index("<mask>"),
+            mask_whole_words,
+            shuffle=self.args.shuffle_instance,
+            seed=self.seed,
+            args=self.args,
+            multitask_denoising_prob=self.args.mixed_multitask_denoising_prob,
+            denoising_item_transform_func=AddTaskAndLangToksTransform(
+                dae_tok, src_langtok, tgt_langtok
+            ),
+            lm_item_transform_func=AddTaskAndLangToksTransform(
+                lm_tok, src_langtok, tgt_langtok
+            ),
+        )
+
+        return combined_dataset
+
     def load_langpair_dataset(
         self,
         data_path,
@@ -829,7 +1224,7 @@ class MultilingualDatasetManager(object):
                 f"[{split}] {src}-{tgt}: src length={len(src_dataset)}; tgt length={len(tgt_dataset)}"
             )
 
-        return LanguagePairDataset(
+        langpair_dataset = LanguagePairDataset(
             src_dataset,
             src_dataset.sizes,
             src_dict,
@@ -843,8 +1238,9 @@ class MultilingualDatasetManager(object):
             tgt_lang_id=tgt_lang_id,
             fixed_pad_length=self.pad_to_fixed_length,
         )
+        return langpair_dataset
 
-    def src_dataset_tranform_func(self, src_lang, tgt_lang, dataset, spec=None):
+    def src_dataset_transform_func(self, src_lang, tgt_lang, dataset, spec=None):
         if self.args.lang_tok_replacing_bos_eos:
             # it is handled by self.alter_dataset_langtok
             # TODO: Unifiy with alter_dataset_langtok
@@ -856,7 +1252,7 @@ class MultilingualDatasetManager(object):
             return PrependTokenDataset(dataset, tok)
         return dataset
 
-    def tgt_dataset_tranform_func(self, source_lang, target_lang, dataset, spec=None):
+    def tgt_dataset_transform_func(self, source_lang, target_lang, dataset, spec=None):
         if dataset is None:
             # note that target dataset can be None during inference time
             return None
@@ -933,8 +1329,8 @@ class MultilingualDatasetManager(object):
         max_target_positions = self.args.max_target_positions
         load_alignments = self.args.load_alignments
         truncate_source = self.args.truncate_source
-        src_dataset_transform_func = self.src_dataset_tranform_func
-        tgt_dataset_transform_func = self.tgt_dataset_tranform_func
+        src_dataset_transform_func = self.src_dataset_transform_func
+        tgt_dataset_transform_func = self.tgt_dataset_transform_func
         enable_lang_ids = self.args.enable_lang_ids
         lang_dictionary = self.lang_dict
         src_langtok_spec, tgt_langtok_spec = extra_kwargs["langtok_spec"]
@@ -945,37 +1341,126 @@ class MultilingualDatasetManager(object):
             f"{data_category}:{src}-{tgt} src_langtok: {src_langtok}; tgt_langtok: {tgt_langtok}"
         )
 
-        langpair_ds = self.load_langpair_dataset(
-            data_path,
-            split,
-            src,
-            src_dict,
-            tgt,
-            tgt_dict,
-            combine,
-            dataset_impl,
-            upsample_primary,
-            left_pad_source,
-            left_pad_target,
-            max_source_positions,
-            max_target_positions,
-            prepend_bos,
-            load_alignments,
-            truncate_source,
-            src_dataset_transform_func=lambda dataset: src_dataset_transform_func(
-                src, tgt, dataset, src_langtok_spec
-            ),
-            tgt_dataset_transform_func=lambda dataset: tgt_dataset_transform_func(
-                src, tgt, dataset, tgt_langtok_spec
-            ),
-            src_lang_id=_lang_id(lang_dictionary, src)
-            if enable_lang_ids and lang_dictionary is not None
-            else None,
-            tgt_lang_id=_lang_id(lang_dictionary, tgt)
-            if enable_lang_ids and lang_dictionary is not None
-            else None,
-            langpairs_sharing_datasets=langpairs_sharing_datasets,
-        )
+        if data_category == "mono_dae":
+            langpair_ds = self.load_denoise_langpair_dataset(
+                data_path,
+                split,
+                src,
+                src_dict,
+                tgt,
+                tgt_dict,
+                combine,
+                dataset_impl,
+                upsample_primary,
+                left_pad_source,
+                left_pad_target,
+                max_source_positions,
+                max_target_positions,
+                prepend_bos,
+                load_alignments,
+                truncate_source,
+                src_dataset_transform_func=lambda dataset: dataset,
+                tgt_dataset_transform_func=lambda dataset: dataset,
+                src_lang_id=_lang_id(lang_dictionary, src)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                tgt_lang_id=_lang_id(lang_dictionary, tgt)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                src_langtok=src_langtok,
+                tgt_langtok=tgt_langtok,
+            )
+        elif data_category == "mono_lm":
+            langpair_ds = self.load_lm_langpair_dataset(
+                data_path,
+                split,
+                src,
+                src_dict,
+                tgt,
+                tgt_dict,
+                combine,
+                dataset_impl,
+                upsample_primary,
+                left_pad_source,
+                left_pad_target,
+                max_source_positions,
+                max_target_positions,
+                prepend_bos,
+                load_alignments,
+                truncate_source,
+                src_dataset_transform_func=lambda dataset: dataset,
+                tgt_dataset_transform_func=lambda dataset: dataset,
+                src_lang_id=_lang_id(lang_dictionary, src)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                tgt_lang_id=_lang_id(lang_dictionary, tgt)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                src_langtok=src_langtok,
+                tgt_langtok=tgt_langtok,
+            )
+        elif data_category == "mono_mixed_task":
+            langpair_ds = self.load_mixed_task_langpair_dataset(
+                data_path,
+                split,
+                src,
+                src_dict,
+                tgt,
+                tgt_dict,
+                combine,
+                dataset_impl,
+                upsample_primary,
+                left_pad_source,
+                left_pad_target,
+                max_source_positions,
+                max_target_positions,
+                prepend_bos,
+                load_alignments,
+                truncate_source,
+                src_dataset_transform_func=lambda dataset: dataset,
+                tgt_dataset_transform_func=lambda dataset: dataset,
+                src_lang_id=_lang_id(lang_dictionary, src)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                tgt_lang_id=_lang_id(lang_dictionary, tgt)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                src_langtok=src_langtok,
+                tgt_langtok=tgt_langtok,
+            )
+
+        else:
+            langpair_ds = self.load_langpair_dataset(
+                data_path,
+                split,
+                src,
+                src_dict,
+                tgt,
+                tgt_dict,
+                combine,
+                dataset_impl,
+                upsample_primary,
+                left_pad_source,
+                left_pad_target,
+                max_source_positions,
+                max_target_positions,
+                prepend_bos,
+                load_alignments,
+                truncate_source,
+                src_dataset_transform_func=lambda dataset: src_dataset_transform_func(
+                    src, tgt, dataset, src_langtok_spec
+                ),
+                tgt_dataset_transform_func=lambda dataset: tgt_dataset_transform_func(
+                    src, tgt, dataset, tgt_langtok_spec
+                ),
+                src_lang_id=_lang_id(lang_dictionary, src)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                tgt_lang_id=_lang_id(lang_dictionary, tgt)
+                if enable_lang_ids and lang_dictionary is not None
+                else None,
+                langpairs_sharing_datasets=langpairs_sharing_datasets,
+            )
         # TODO: handle modified lang toks for mined data and dae data
         if self.args.lang_tok_replacing_bos_eos:
             ds = self.alter_dataset_langtok(
@@ -1008,9 +1493,19 @@ class MultilingualDatasetManager(object):
         return datasets
 
     def get_data_paths_and_lang_pairs(self, split):
-        datapaths = {"main": self.args.data}
-        lang_pairs = {"main": self.lang_pairs}
-        if split == getattr(self.args, "train_subset", None):
+        if getattr(self.args, "ignore_mmt_main_data", False):
+            assert (
+                self.args.extra_data
+            ), "can't ignore the primary MMT data without any extra data source --extra-data"
+            datapaths = {}
+            lang_pairs = {}
+        else:
+            datapaths = {"main": self.args.data}
+            lang_pairs = {"main": self.lang_pairs}
+        if getattr(self.args, "ignore_mmt_main_data", False) or split == getattr(
+            self.args, "train_subset", None
+        ):
+            # unless we set ignore_mmt_main_data,
             # only training data can have extra data and extra language pairs
             if self.args.extra_data:
                 extra_datapaths = self.args.extra_data
@@ -1066,7 +1561,10 @@ class MultilingualDatasetManager(object):
                         f"error: src={src}, "
                         "tgt={tgt} for data_category={data_category}"
                     )
-                    num_shards_dict[key] = shards_dict[tgt]
+                    if tgt in shards_dict:
+                        num_shards_dict[key] = shards_dict[tgt]
+                    elif f"{tgt}-{tgt}" in shards_dict:
+                        num_shards_dict[key] = shards_dict[f"{tgt}-{tgt}"]
                 else:
                     if f"{src}-{tgt}" in shards_dict:
                         num_shards_dict[key] = shards_dict[f"{src}-{tgt}"]
@@ -1131,9 +1629,9 @@ class MultilingualDatasetManager(object):
             ]
             lang_dirs = [x if len(x) > 1 else (x[0], x[0]) for x in lang_dirs]
             for src, tgt in lang_dirs:
-                assert src is not None or data_category == "mono_dae", (
-                    f"error: src={src}, " "tgt={tgt} for data_category={data_category}"
-                )
+                assert (
+                    src is not None or data_category in MONOLINGUAL_DATA_CATEGORIES
+                ), (f"error: src={src}, " "tgt={tgt} for data_category={data_category}")
                 # logger.info(f"preparing param for {data_category}: {src} - {tgt}")
                 key = self.get_dataset_key(data_category, src, tgt)
                 if key in split_num_shards_dict:
@@ -1152,7 +1650,7 @@ class MultilingualDatasetManager(object):
                         "split": split,
                         "src": src,
                         "src_dict": self.get_source_dictionary(src)
-                        if src and data_category != "mono_dae"
+                        if src and data_category not in MONOLINGUAL_DATA_CATEGORIES
                         else None,
                         "tgt": tgt,
                         "tgt_dict": self.get_target_dictionary(tgt),
@@ -1238,6 +1736,7 @@ class MultilingualDatasetManager(object):
         data_param_list = self.get_split_data_param_list(
             split, epoch, shard_epoch=shard_epoch
         )
+
         langpairs_sharing_datasets = (
             {} if self.args.enable_reservsed_directions_shared_datasets else None
         )
@@ -1252,6 +1751,7 @@ class MultilingualDatasetManager(object):
             )
             for param in data_param_list
         ]
+
         return datasets, data_param_list
 
     def load_into_concat_dataset(self, split, datasets, data_param_list):

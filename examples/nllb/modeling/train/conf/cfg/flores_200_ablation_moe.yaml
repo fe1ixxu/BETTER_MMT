@@ -8,7 +8,7 @@ fairseq_root: ???
 output_dir: ???
 log_dir: null
 
-train_prefix: moe16
+train_prefix: moe
 seed: 2
 arch: transformer_24_24
 max_updates: 100000
@@ -33,3 +33,4 @@ mem: 0
 moe_eval_cap: 1.0
 checkpoint_activations: false
 zero2: false
+train_subset: train

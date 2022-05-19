@@ -29,8 +29,10 @@ def get_averages(scores_map, threshold=50):
     xx_en = defaultdict(list)
     non_eng = defaultdict(list)
     all_pairs = defaultdict(list)
+    counts = defaultdict(int)
     for pair, score in scores_map.items():
         resource = get_type(pair)
+        counts[resource] += 1
         if score > threshold:
             print(f"{pair} {score} is skipped due to threshold")
             continue
@@ -48,6 +50,7 @@ def get_averages(scores_map, threshold=50):
         else:
             non_eng[resource].append(score)
             non_eng['all'].append(score)
+    print(counts)
     avg_en_xx = defaultdict(int)
     avg_xx_en = defaultdict(int)
     avg_non_eng = defaultdict(int)
@@ -125,7 +128,7 @@ def main():
     pairs = en_xx_pairs + non_en_pairs + xx_en_pairs
     rows = defaultdict(list)
     for updates in update_values:
-        average_vals = get_averages(valid_ppls[updates])
+        average_vals = get_averages(valid_ppls[updates], args.threshold)
         for subset, avgs in average_vals.items():
             for res, val in avgs.items():
                 rows[f"{subset}_{res}"].append(str(val))

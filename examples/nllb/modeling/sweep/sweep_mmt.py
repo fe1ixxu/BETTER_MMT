@@ -67,6 +67,63 @@ def get_predefined_grid(
 
 
 def add_extra_options_func(parser):
+    parser.add_argument(
+        "--mask",
+        default=0.1,
+        type=float,
+        help="fraction of words/subwords that will be masked",
+    )
+    parser.add_argument(
+        "--mask-random",
+        default=0.0,
+        type=float,
+        help="instead of using [MASK], use random token this often",
+    )
+    parser.add_argument(
+        "--insert",
+        default=0.0,
+        type=float,
+        help="insert this percentage of additional random tokens",
+    )
+    parser.add_argument(
+        "--permute",
+        default=0.0,
+        type=float,
+        help="take this proportion of subwords and permute them",
+    )
+    parser.add_argument(
+        "--rotate",
+        default=0.0,
+        type=float,
+        help="rotate this proportion of inputs",
+    )
+    parser.add_argument(
+        "--poisson-lambda",
+        default=3.0,
+        type=float,
+        help="randomly shuffle sentences for this proportion of inputs",
+    )
+    parser.add_argument(
+        "--mask-length",
+        default="subword",
+        type=str,
+        choices=["subword", "word", "span-poisson"],
+        help="mask length to choose",
+    )
+    parser.add_argument(
+        "--sampling-weights", default=None, type=str, help="sampling weights"
+    )
+    parser.add_argument(
+        "--replace-length",
+        default=1,
+        type=int,
+        help="when masking N tokens, replace with 0, 1, or N tokens (use -1 for N)",
+    )
+    parser.add_argument("--extra-data", help="extra data for mono DAE", default=None)
+    parser.add_argument(
+        "--extra-lang-pairs", help="extra lang pairs for mono DAE", default=None
+    )
+    parser.add_argument("--langtoks", default=None)
     parser.add_argument("--max-update", help="max update", default=40000)
     parser.add_argument(
         "--finetune-from-model",
@@ -139,7 +196,7 @@ def add_extra_options_func(parser):
     )
     parser.add_argument(
         "--moe-eval-cap",
-        default=0.25,
+        default=1.0,
         type=float,
         help="moe-eval-capacity-token-fraction",
     )
@@ -209,6 +266,19 @@ def add_extra_options_func(parser):
         type=str,
         help="specify training data sources",
     )
+    parser.add_argument(
+        "--ignore-mmt-main-data",
+        action="store_true",
+        default=False,
+        help="ignore the main MMT data (e.g. during self-supervised pretraining)."
+        + "This is a hack to do denoising pretraining within the same task",
+    )
+    parser.add_argument(
+        "--valid-subset",
+        default="valid",
+        type=str,
+        help="valid subset",
+    )
 
     # addded adapter parameters
     parser.add_argument("--base-model", type=str, default=None)
@@ -232,8 +302,15 @@ def add_extra_options_func(parser):
         "and en-yy or yy-en valid files are available.",
     )
 
+    parser.add_argument(
+        "--add-data-source-prefix-tags",
+        default=False,
+        action="store_true",
+        help="Add data tags",
+    )
+
     parser.add_argument("--moe-gt-drp", type=float, default=0.0)
-    parser.add_argument("--moe-tok-drp", type=float, default=0.0)
+    parser.add_argument("--moe-tok-drp", type=float, default=0.1)
     parser.add_argument("--all-tok-drp", type=float, default=0.0)
     parser.add_argument("--moe-unit-drp", type=float, default=0.0)
     parser.add_argument("--moe-clsr", action="store_true", default=0.0)
@@ -248,6 +325,7 @@ def get_grid(args):
     sampling_temperature = args.sampling_temperature
 
     grids = [
+        hyperparam("--skip-invalid-size-inputs-valid-test", [True], binary_flag=True),
         hyperparam("--memory-efficient-fp16", save_dir_key=lambda val: "mfp16"),
         # hyperparam("--fp16", save_dir_key=lambda val: "fp16"),
         # hyperparam("--fp16-no-flatten-grads"),
@@ -277,11 +355,7 @@ def get_grid(args):
         hyperparam("--lr-scheduler", "inverse_sqrt"),
         hyperparam("--warmup-init-lr", 1e-7),
         # TODO: sweep over warmup-updates and LR
-        hyperparam(
-            "--warmup-updates",
-            [args.warmup_updates],
-            save_dir_key=lambda val: f"warmup{val}",
-        ),
+        hyperparam("--warmup-updates", [args.warmup_updates]),
         hyperparam("--lr", args.lr, save_dir_key=lambda val: f"lr{val}"),
         hyperparam("--stop-min-lr", 1e-9),
         hyperparam("--clip-norm", 0.0),
@@ -309,6 +383,7 @@ def get_grid(args):
             "--validate-interval-updates",
             args.validate_interval_updates,
         ),
+        hyperparam("--valid-subset", args.valid_subset),
         hyperparam("--keep-interval-updates", 10),
         hyperparam("--keep-last-epochs", 1),
         # disable epoch level validation
@@ -323,6 +398,11 @@ def get_grid(args):
         hyperparam(
             "--enable-m2m-validation",
             args.enable_m2m_validation,
+            binary_flag=True,
+        ),
+        hyperparam(
+            "--add-data-source-prefix-tags",
+            args.add_data_source_prefix_tags,
             binary_flag=True,
         ),
         # hyperparam("--batch-size", 16, save_dir_key=lambda val: f"bsz{val}"),
@@ -414,18 +494,30 @@ def get_grid(args):
                 hyperparam("--moe-normalize-expert-grad", ["sqrt_world_size"]),
                 # gradient explosion issues encountered with Tutel MoE
                 # hyperparam("--use-tutel-moe"),
+                # hyperparam("--moe-dropout", [0.1], save_dir_key=lambda val: f"moe_exdrp{val}"),
+                # hyperparam("--moe-gate-lang-only", binary_flag=True, save_dir_key=lambda x: "moe_gtlang"),
+                # hyperparam("--moe-gate-drop", [0.1], save_dir_key=lambda val: f"moe_drp{val}"),
+                # hyperparam("--moe-gate-drop2", [0.1], save_dir_key=lambda val: f"moe_drp2{val}"),
+                # hyperparam("--moe-tok-dropout", [0.2], save_dir_key=lambda val: f"moe_tok_drp{val}"),
+                # hyperparam("--dropout-2d", [0.1], save_dir_key=lambda val: f"drop2d{val}"),
+                # hyperparam("--moe-only-dropout", [0.1], save_dir_key=lambda val: f"moe_unit_drp{val}"),
+                # hyperparam("--use-local-prob", [0.1], save_dir_key=lambda val: f"moe_local_drp{val}"),
+                # hyperparam("--moe-clsr", save_dir_key=lambda val: f"clsr{val}"),
+                # hyperparam("--clsr-gate-loss-wt", [0.1], save_dir_key=lambda val: f"c_wt{val}"),
+                # hyperparam("--clsr-gate-loss-p", [0.8], save_dir_key=lambda val: f"c_p{val}"),
+                # hyperparam("--clsr-gate-drop", [0.1], save_dir_key=lambda val: f"c_drp{val}"),
+                # hyperparam("--clsr-gate-drop-scale", binary_flag=True, save_dir_key=lambda x: "c_scl"),
+                # hyperparam("--clsr-log-lang-gates"),
+                # hyperparam("--moe-clsr-xgpu", save_dir_key=lambda val: f"xgpu{val}"),
+                # hyperparam("--moe-hier-l", "4,4", save_dir_key=lambda val: f"hmoe{val}"),
             ]
         )
-        if args.moe_expert_count is not None and args.moe_expert_count < (
-            args.num_nodes * args.num_gpus
-        ):
-            grids.append(hyperparam("--use-sharded-state"))
         if args.moe_gt_drp > 0:  # row 4
             grids.append(
                 hyperparam(
                     "--moe-gate-drop",
                     [args.moe_gt_drp],
-                    save_dir_key=lambda val: f"moe_gt_drp{val}",
+                    save_dir_key=lambda val: f"mgtdrp{val}",
                 )
             )
         if args.moe_tok_drp > 0:  # row 5
@@ -433,7 +525,7 @@ def get_grid(args):
                 hyperparam(
                     "--moe-tok-dropout",
                     [args.moe_tok_drp],
-                    save_dir_key=lambda val: f"moe_tok_drp{val}",
+                    save_dir_key=lambda val: f"mtdrp{val}",
                 )
             )
         if args.all_tok_drp > 0:  # row 6
@@ -531,6 +623,63 @@ def get_grid(args):
         )
 
     grids.extend(get_predefined_grid(args.arch))
+    if args.extra_data:
+        grids.append(
+            hyperparam("--extra-data", args.extra_data),
+        )
+        grids.append(
+            hyperparam("--extra-lang-pairs", args.extra_lang_pairs),
+        )
+        grids.append(
+            hyperparam("--langtoks", args.langtoks),
+        )
+        grids.append(
+            hyperparam("--mask", args.mask, save_dir_key=lambda val: f"m{val}"),
+        )
+        grids.append(
+            hyperparam(
+                "--mask-random", args.mask_random, save_dir_key=lambda val: f"mr{val}"
+            ),
+        )
+        grids.append(
+            hyperparam("--insert", args.insert, save_dir_key=lambda val: f"i{val}"),
+        )
+        grids.append(
+            hyperparam("--permute", args.permute, save_dir_key=lambda val: f"p{val}"),
+        )
+        grids.append(
+            hyperparam("--rotate", args.rotate, save_dir_key=lambda val: f"r{val}"),
+        )
+        grids.append(
+            hyperparam(
+                "--poisson-lambda",
+                args.poisson_lambda,
+                save_dir_key=lambda val: f"pl{val}",
+            ),
+        )
+        grids.append(
+            hyperparam("--mask-length", args.mask_length),
+        )
+        grids.append(
+            hyperparam(
+                "--replace-length",
+                args.replace_length,
+                save_dir_key=lambda val: f"rl{val}",
+            ),
+        )
+        if args.sampling_weights is not None:
+            grids.append(
+                hyperparam("--sampling-weights", args.sampling_weights),
+            )
+        if args.ignore_mmt_main_data:
+            grids.append(
+                hyperparam(
+                    "--ignore-mmt-main-data",
+                    [True],
+                    binary_flag=True,
+                    save_dir_key=lambda val: "no_mmt",
+                )
+            )
 
     # adapted adapter parameters
     if args.base_model:
@@ -556,7 +705,7 @@ def get_grid(args):
             hyperparam(
                 "--train-subset",
                 args.train_subset,
-                save_dir_key=lambda val: f"ts_{val}",
+                # save_dir_key=lambda val: f"ts_{val}",
             )
         )
 
@@ -621,12 +770,12 @@ def get_transformer_12_12_grid():
         hyperparam(
             "--encoder-ffn-embed-dim",
             4 * 1024,
-            save_dir_key=lambda val: f"encffnx{val}",
+            save_dir_key=lambda val: f"efn{val}",
         ),
         hyperparam(
             "--decoder-ffn-embed-dim",
             4 * 1024,
-            save_dir_key=lambda val: f"decffnx{val}",
+            save_dir_key=lambda val: f"dfn{val}",
         ),
         hyperparam("--encoder-embed-dim", 1024, save_dir_key=lambda val: f"E{val}"),
         hyperparam("--decoder-embed-dim", 1024),
@@ -639,8 +788,8 @@ def get_transformer_12_12_grid():
             save_dir_key=lambda _: "NBF",
         ),
         hyperparam("--decoder-normalize-before", True, binary_flag=True),
-        hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"ATTDRP{val}"),
-        hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RELDRP{val}"),
+        hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"ADR{val}"),
+        hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RDR{val}"),
     ]
 
 
@@ -738,12 +887,12 @@ def get_transformer_24_24_grid():
         hyperparam(
             "--encoder-ffn-embed-dim",
             8 * 1024,
-            save_dir_key=lambda val: f"encffnx{val}",
+            save_dir_key=lambda val: f"ef{val}",
         ),
         hyperparam(
             "--decoder-ffn-embed-dim",
             8 * 1024,
-            save_dir_key=lambda val: f"decffnx{val}",
+            save_dir_key=lambda val: f"df{val}",
         ),
         hyperparam("--encoder-embed-dim", 1024, save_dir_key=lambda val: f"E{val}"),
         hyperparam("--decoder-embed-dim", 1024),
@@ -756,8 +905,8 @@ def get_transformer_24_24_grid():
             save_dir_key=lambda _: "NBF",
         ),
         hyperparam("--decoder-normalize-before", True, binary_flag=True),
-        hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"ATTDRP{val}"),
-        hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RELDRP{val}"),
+        hyperparam("--attention-dropout", 0.1, save_dir_key=lambda val: f"AD{val}"),
+        hyperparam("--relu-dropout", 0.0, save_dir_key=lambda val: f"RD{val}"),
     ]
 
 

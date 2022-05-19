@@ -9,10 +9,10 @@ from typing import List, Optional
 
 import torch
 
-from fairseq import metrics, utils, distributed_utils
+from fairseq import distributed_utils, metrics, utils
 from fairseq.criterions import FairseqCriterion, MoECriterionConfig, register_criterion
-from fairseq.modules.moe import MOELayer
 from fairseq.logging.meters import GroupedAverageMeter
+from fairseq.modules.moe import MOELayer
 
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
@@ -195,7 +195,6 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         for clsr_gate_total in net_output[1]["clsr_gate_loss_denom"]:
             if clsr_gate_total is not None:
                 clsr_gate_total_sum += clsr_gate_total
-
         if self.moe_clsr_xgpu:
             clsr_gate_used_sum = distributed_utils.all_reduce(
                 clsr_gate_used_sum,

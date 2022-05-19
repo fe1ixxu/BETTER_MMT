@@ -25,6 +25,8 @@ class EncoderLangtok(Enum):
 class LangTokSpec(Enum):
     main = "main"
     mono_dae = "mono_dae"
+    mono_lm = "mono_lm"
+    mono_mixed_task = "mono_mixed_task"  # both of the above
 
 
 class LangTokStyle(Enum):
@@ -45,6 +47,8 @@ def get_lang_tok(
 
     if spec.endswith("dae"):
         lang = f"{lang}_dae"
+    elif spec.endswith("lm"):
+        lang = f"{lang}_lm"
     elif spec.endswith("mined"):
         lang = f"{lang}_mined"
     style = TOKEN_STYLES[lang_tok_style]
@@ -58,6 +62,7 @@ def augment_dictionary(
     langtoks_specs: Sequence[str] = (LangTokSpec.main.value,),
     extra_data: Optional[Dict[str, str]] = None,
     add_data_source_prefix_tags: bool = False,
+    add_ssl_task_tokens: bool = False,
 ) -> None:
     for spec in langtoks_specs:
         for language in language_list:
@@ -66,11 +71,24 @@ def augment_dictionary(
             )
 
     if lang_tok_style == LangTokStyle.mbart.value or (
-        extra_data is not None and LangTokSpec.mono_dae.value in extra_data
+        extra_data is not None
+        and (
+            (LangTokSpec.mono_dae.value in extra_data)
+            or (LangTokSpec.mono_mixed_task.value in extra_data)
+        )
     ):
         dictionary.add_symbol("<mask>")
+        if add_ssl_task_tokens:
+            dictionary.add_symbol("__dae__")
 
     # Add special tokens.
     if add_data_source_prefix_tags:
         for name, tok in DATA_SOURCE_PREFIX_TAGS.items():
             dictionary.add_symbol(tok)
+
+    if extra_data is not None and (
+        (LangTokSpec.mono_lm.value in extra_data)
+        or (LangTokSpec.mono_mixed_task.value in extra_data)
+    ):
+        if add_ssl_task_tokens:
+            dictionary.add_symbol("__lm__")

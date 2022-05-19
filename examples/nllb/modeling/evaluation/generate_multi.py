@@ -8,12 +8,12 @@ import asyncio
 import os
 import subprocess
 import typing as tp
+from collections import defaultdict
 from dataclasses import dataclass
 from random import randint
 
 import hydra
 from omegaconf import MISSING, DictConfig
-from collections import defaultdict
 
 from examples.nllb.nllb_lib.nllb_module import DistributedRequirements, NLLBModule
 
@@ -82,10 +82,11 @@ class GenerateMultiModule(NLLBModule):
             chunks = []
             i = 0
             while i < len(lst):
-                chunks.append(lst[i:min(i + chunk_size, len(lst))])
+                chunks.append(lst[i : min(i + chunk_size, len(lst))])
                 i = i + chunk_size
             print(chunks)
             return chunks
+
         lang_pairs = (
             self.config.lang_config.all
             if self.config.eval_on == "all"
@@ -93,13 +94,17 @@ class GenerateMultiModule(NLLBModule):
         )
         filtered_pairs = []
         for lang_pair in lang_pairs:
-            if self.config.direction == "all" or (
-                    self.config.direction == "en_to_many" and lang_pair.startswith("eng-")
-                ) or (
+            if (
+                self.config.direction == "all"
+                or (
+                    self.config.direction == "en_to_many"
+                    and lang_pair.startswith("eng-")
+                )
+                or (
                     self.config.direction == "many_to_en" and lang_pair.endswith("-eng")
-                ) or (
-                    self.config.direction == "non_english" and "eng" not in lang_pair
-                ):
+                )
+                or (self.config.direction == "non_english" and "eng" not in lang_pair)
+            ):
                 filtered_pairs.append(lang_pair)
         lang_pairs_chunks = chunk(filtered_pairs, self.config.lang_pairs_per_job)
         return [
@@ -142,8 +147,8 @@ class GenerateMultiModule(NLLBModule):
         lang_pairs = job_config.lang_pairs
         for lang_pair in lang_pairs:
             try:
-                src = lang_pair.split('-')[0]
-                tgt = lang_pair.split('-')[1]
+                src = lang_pair.split("-")[0]
+                tgt = lang_pair.split("-")[1]
                 if self.config.model_type == "moe":
                     max_sentences = 16
                     cap = 1.0
@@ -160,7 +165,7 @@ class GenerateMultiModule(NLLBModule):
                         "--is-moe "
                         f"--distributed-world-size {world_size} "
                         f"--distributed-port {port} "
-                        f"--model-overrides \"{repr(model_overrides)}\" "
+                        f'--model-overrides "{repr(model_overrides)}" '
                     )
                 else:
                     moe_params = ""
@@ -176,7 +181,9 @@ class GenerateMultiModule(NLLBModule):
                 checkpoint_name = job_config.checkpoint
                 if self.config.model_type == "dense":
                     checkpoint_name += "-shard0"
-                model = os.path.join(self.config.model_folder, f"{job_config.checkpoint}.pt")
+                model = os.path.join(
+                    self.config.model_folder, f"{job_config.checkpoint}.pt"
+                )
                 # TODO maybe call generate main directly here with a hydra config
                 generate_command = (
                     f"python {self.config.fairseq_root}/fairseq_cli/generate.py "
@@ -194,31 +201,42 @@ class GenerateMultiModule(NLLBModule):
                     " --bpe 'sentencepiece' "
                     f" --sentencepiece-model {self.config.spm_model} "
                     " --sacrebleu "
+                    " --enable-m2m-validation "
                     f" {'--fp16' if self.config.fp16 else ''}"
                     f" {moe_params} "
                     f" --max-sentences {max_sentences} "
                     f" --results-path {out_dir}"
                 )
-                post_proc_command = f"/bin/bash -o pipefail -c '" + \
-                        f"cat {out_dir}/generate-{job_config.gen_split}.txt" + \
-                        ' | grep -aP "^D-"' + \
-                        " | sort -nr -k1.2 " + \
-                        " | cut -f3' " + \
-                        " | sed 's/^<MINED_DATA> //g' " + \
-                        f" > {out_dir}/gen_best.output"
+                post_proc_command = (
+                    f"/bin/bash -o pipefail -c '"
+                    + f"cat {out_dir}/generate-{job_config.gen_split}.txt"
+                    + ' | grep -aP "^D-"'
+                    + " | sort -nr -k1.2 "
+                    + " | cut -f3' "
+                    + " | sed 's/^<MINED_DATA> //g' "
+                    + f" > {out_dir}/gen_best.output"
+                )
                 flores_split = "dev" if job_config.gen_split == "valid" else "devtest"
                 ref_file = os.path.join(
-                    self.config.cluster.flores_path, flores_split, f"{tgt}.{flores_split}"
+                    self.config.cluster.flores_path,
+                    flores_split,
+                    f"{tgt}.{flores_split}",
                 )
                 # Install `pip install git+https://github.com/mjpost/sacrebleu.git@master`
                 # spm BLEU Eval
-                bleu_command = f'SACREBLEU_FORMAT=text ' + \
-                        f"sacrebleu -tok spm {ref_file} < {out_dir}/gen_best.output " + \
-                        f" > {out_dir}/bleu.results"
+                bleu_command = (
+                    f"SACREBLEU_FORMAT=text "
+                    + f"sacrebleu -tok spm {ref_file} < {out_dir}/gen_best.output "
+                    + f" > {out_dir}/bleu.results"
+                )
                 # chrf++ Eval
-                chrf_command = f"sacrebleu -m chrf --chrf-word-order 2 -tok spm {ref_file} < {out_dir}/gen_best.output " + \
-                        f" > {out_dir}/chrf.results"
-                full_command = "\n".join([generate_command, post_proc_command, bleu_command, chrf_command])
+                chrf_command = (
+                    f"sacrebleu -m chrf --chrf-word-order 2 -tok spm {ref_file} < {out_dir}/gen_best.output "
+                    + f" > {out_dir}/chrf.results"
+                )
+                full_command = "\n".join(
+                    [generate_command, post_proc_command, bleu_command, chrf_command]
+                )
                 if self.config.get("debug", False):
                     print(full_command)
                 else:
@@ -234,17 +252,19 @@ class GenerateMultiModule(NLLBModule):
                 print(e)
                 continue
 
+
 def get_type(pair):
     if "-" not in pair:
         return None
     from examples.nllb.modeling.evaluation.train_example_count import flores200_v4_1
+
     train_counts2 = flores200_v4_1.train_counts
     # 15M, 2-15M,0.1-2M, <0.1M
-    low_limits =  {'high':   10000000, 'mid':  2000000, 'low':  100000, 'v_low': 0}
-    high_limits = {'high': 1000000000, 'mid': 10000000, 'low': 2000000, 'v_low': 100000}
-    lang = pair.split('-')[1]
+    low_limits = {"high": 10000000, "mid": 2000000, "low": 100000, "v_low": 0}
+    high_limits = {"high": 1000000000, "mid": 10000000, "low": 2000000, "v_low": 100000}
+    lang = pair.split("-")[1]
     if lang == "eng":
-        lang = pair.split('-')[0]
+        lang = pair.split("-")[0]
     if lang not in train_counts2:
         print(f"{lang} is not in train_counts")
         return None
@@ -254,30 +274,30 @@ def get_type(pair):
             return t
 
 
-def get_averages(scores_map, threshold=100):
+def get_averages(scores_map, threshold=0):
     en_xx = defaultdict(list)
     xx_en = defaultdict(list)
     non_eng = defaultdict(list)
     all_pairs = defaultdict(list)
     for pair, score in scores_map.items():
         resource = get_type(pair)
-        if score > threshold:
+        if score < threshold:
             print(f"{pair} {score} is skipped due to threshold")
             continue
         if resource is None:
             print(f"{pair} {score} is skipped due to missing resource level")
             continue
-        all_pairs['all'].append(score)
+        all_pairs["all"].append(score)
         all_pairs[resource].append(score)
         if pair.startswith("eng-"):
             en_xx[resource].append(score)
-            en_xx['all'].append(score)
+            en_xx["all"].append(score)
         elif pair.endswith("-eng"):
             xx_en[resource].append(score)
-            xx_en['all'].append(score)
+            xx_en["all"].append(score)
         else:
             non_eng[resource].append(score)
-            non_eng['all'].append(score)
+            non_eng["all"].append(score)
     avg_en_xx = defaultdict(int)
     avg_xx_en = defaultdict(int)
     avg_non_eng = defaultdict(int)
@@ -286,9 +306,14 @@ def get_averages(scores_map, threshold=100):
     averages = [avg_en_xx, avg_xx_en, avg_non_eng, avg_all_pairs]
     for idx, agg in enumerate(averages):
         lst = lists[idx]
-        for resource in ['all', 'high', 'mid', 'low', 'v_low']:
-            agg[resource] = round(sum(lst[resource])/max(len(lst[resource]), 1), 2)
-    return {'en-xx': avg_en_xx, 'xx-en': avg_xx_en, 'non-eng': avg_non_eng, 'all': avg_all_pairs}
+        for resource in ["all", "high", "mid", "low", "v_low"]:
+            agg[resource] = round(sum(lst[resource]) / max(len(lst[resource]), 1), 2)
+    return {
+        "en-xx": avg_en_xx,
+        "xx-en": avg_xx_en,
+        "non-eng": avg_non_eng,
+        "all": avg_all_pairs,
+    }
 
 
 async def tabulate(config: DictConfig) -> None:
@@ -298,13 +323,14 @@ async def tabulate(config: DictConfig) -> None:
         cap = "no_cap"
     out_dir = os.path.join(config.output_dir, f"gen_output_{cap}")
     lang_pairs = config.lang_config.all
-    
+
     for chk in config.checkpoints:
         for split in config.gen_splits:
             bleus_map = {}
             chrf_map = {}
+            lang_pairs = sorted(list(set(lang_pairs)))
             for lang_pair in lang_pairs:
-                src, tgt = lang_pair.split('-')
+                src, tgt = lang_pair.split("-")
                 pair_dir = f"{src}-{tgt}_{chk}_{split}"
                 bleu_fpath = os.path.join(out_dir, pair_dir, "bleu.results")
                 command = f"cat {bleu_fpath} | cut -d' ' -f3 "
@@ -319,10 +345,7 @@ async def tabulate(config: DictConfig) -> None:
             average_bleus = get_averages(bleus_map)
             average_chrfs = get_averages(chrf_map)
             for metric in ["bleu", "chrf"]:
-                output_fpath = os.path.join(
-                    out_dir,
-                    f"{metric}_{chk}_{split}.tsv"
-                )
+                output_fpath = os.path.join(out_dir, f"{metric}_{chk}_{split}.tsv")
                 with open(output_fpath, "w") as fout:
                     average_vals = average_bleus if metric == "bleu" else average_chrfs
                     metric_map = bleus_map if metric == "bleu" else chrf_map

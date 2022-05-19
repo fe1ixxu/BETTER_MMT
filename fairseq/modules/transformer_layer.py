@@ -22,8 +22,7 @@ from fairseq.modules.fused_bias_gelu import (
 )
 from fairseq.modules.fused_bias_relu_squared import fused_bias_relu_squared
 from fairseq.modules.linear import Linear
-from fairseq.modules.moe import MOELayer, Top1Gate, Top2Gate
-from fairseq.modules.moe import CLSRLayer
+from fairseq.modules.moe import CLSRLayer, MOELayer, Top1Gate, Top2Gate
 from fairseq.modules.quant_noise import quant_noise
 from fairseq.utils import relu_squared
 
@@ -202,7 +201,6 @@ class TransformerEncoderLayerBase(nn.Module):
             if cfg.clsr_log_lang_gates:
                 lang_idx = getattr(cfg, "lang_idx", None)
                 assert lang_idx is not None, cfg
-
             if cfg.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,
@@ -619,7 +617,6 @@ class TransformerDecoderLayerBase(nn.Module):
             if cfg.clsr_log_lang_gates:
                 lang_idx = getattr(cfg, "lang_idx")
                 assert lang_idx is not None, cfg
-
             if cfg.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,

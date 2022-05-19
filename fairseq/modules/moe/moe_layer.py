@@ -304,7 +304,6 @@ class MOELayer(Base):
         expert_output = torch.cat(expert_outputs, dim=1)
         if self.all2all_size > 1:
             expert_output = self.all_to_all_wrapper(expert_output)
-
         if self.tok_dropout > 0.0:
             # TODO: replace w Dropout2d
             if self.training:
