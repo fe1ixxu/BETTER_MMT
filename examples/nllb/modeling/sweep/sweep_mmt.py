@@ -192,6 +192,7 @@ def add_extra_options_func(parser):
         action="store_true",
     )
     parser.add_argument("--save-interval-updates", default=None)
+    parser.add_argument("--save-interval", default=None)
     parser.add_argument(
         "--moe",
         action="store_true",
@@ -285,6 +286,8 @@ def add_extra_options_func(parser):
         type=str,
         help="valid subset",
     )
+    parser.add_argument("--keep-interval-updates", default=10, type=int)
+    parser.add_argument("--symlink-best-and-last-checkpoints", action="store_true")
 
     # addded adapter parameters
     parser.add_argument("--base-model", type=str, default=None)
@@ -398,7 +401,7 @@ def get_grid(args):
             args.validate_interval_updates,
         ),
         hyperparam("--valid-subset", args.valid_subset),
-        hyperparam("--keep-interval-updates", 10),
+        hyperparam("--keep-interval-updates", args.keep_interval_updates),
         hyperparam("--keep-last-epochs", 1),
         # disable epoch level validation
         hyperparam("--validate-interval", 1000),
@@ -570,6 +573,8 @@ def get_grid(args):
                 )
         if args.synchronize_checkpoints_before_copy:
             grids.append(hyperparam("--synchronize-checkpoints-before-copy"))
+        if args.symlink_best_and_last_checkpoints:
+            grids.append(hyperparam("--symlink-best-and-last-checkpoints"))
         if args.eval_lang_pairs is not None:
             grids.append(hyperparam("--eval-lang-pairs", args.eval_lang_pairs))
 
@@ -623,6 +628,8 @@ def get_grid(args):
         grids.append(
             hyperparam("--save-interval-updates", args.save_interval_updates),
         )
+    if args.save_interval:
+        grids.append(hyperparam("--save-interval", args.save_interval))
 
     grids.extend(get_predefined_grid(args.arch))
     if args.extra_data:
@@ -928,12 +935,12 @@ def get_transformer_24_24_big_grid():
         hyperparam(
             "--encoder-ffn-embed-dim",
             8 * 1024,
-            save_dir_key=lambda val: f"encffnx{val}",
+            # save_dir_key=lambda val: f"encffnx{val}",
         ),
         hyperparam(
             "--decoder-ffn-embed-dim",
             8 * 1024,
-            save_dir_key=lambda val: f"decffnx{val}",
+            # save_dir_key=lambda val: f"decffnx{val}",
         ),
         hyperparam("--encoder-embed-dim", 2048, save_dir_key=lambda val: f"E{val}"),
         hyperparam("--decoder-embed-dim", 2048),

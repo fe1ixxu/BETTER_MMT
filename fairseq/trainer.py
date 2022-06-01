@@ -968,6 +968,10 @@ class Trainer(object):
                     del loss
 
                 if self.get_num_updates() % 100 == 0:
+                    # this might help with Auks, unsure...
+                    if os.path.exists("/checkpoint/nllb/data/dummy.txt"):
+                        f = open("/checkpoint/nllb/data/dummy.txt")
+                        f.close()
                     gc.collect()
 
                 logging_outputs.append(logging_output)

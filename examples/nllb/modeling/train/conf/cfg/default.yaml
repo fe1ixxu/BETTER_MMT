@@ -16,7 +16,10 @@ max_update_str: null
 resume_finished: false
 synchronize_checkpoints_before_copy: false
 validate_interval_updates: 20000
+keep_interval_updates: 10
+symlink_best_and_last_checkpoints: false
 save_interval_updates: 20000
+save_interval: 1
 best_checkpoint_metric: "loss"
 encoder_langtok: "tgt"
 ddp_backend: "fully_sharded"

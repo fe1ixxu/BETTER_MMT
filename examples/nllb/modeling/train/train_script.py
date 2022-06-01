@@ -63,7 +63,10 @@ class TrainConfig:
     resume_finished: bool = False
     synchronize_checkpoints_before_copy: bool = False
     validate_interval_updates: int = MISSING
+    keep_interval_updates: int = 10
+    symlink_best_and_last_checkpoints: bool = False
     save_interval_updates: int = MISSING
+    save_interval: int = 1
     best_checkpoint_metric: str = MISSING
     encoder_langtok: str = MISSING
     ddp_backend: str = MISSING
@@ -228,10 +231,13 @@ class TrainModule(NLLBModule):
                 --opt adam16bit \
                 --share-all-embeddings \
                 --save-interval-updates {cfg.save_interval_updates} \
+                --save-interval {cfg.save_interval} \
                 --tensorboard-logdir {tensorboard_dir} \
                 --arch {cfg.arch} \
                 --dropout {cfg.dropout} \
                 --validate-interval-updates {cfg.validate_interval_updates} \
+                --keep-interval-updates {cfg.keep_interval_updates} \
+                {"--symlink-best-and-last-checkpoints" if cfg.symlink_best_and_last_checkpoints else ""} \
                 --best-checkpoint-metric {cfg.best_checkpoint_metric} \
                 --seed {cfg.seed} \
                 --train-subset {cfg.train_subset} \
