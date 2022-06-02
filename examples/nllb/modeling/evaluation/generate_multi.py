@@ -202,6 +202,7 @@ class GenerateMultiModule(NLLBModule):
                     f" --sentencepiece-model {self.config.spm_model} "
                     " --sacrebleu "
                     " --enable-m2m-validation "
+                    " --add-data-source-prefix-tags "
                     f" {'--fp16' if self.config.fp16 else ''}"
                     f" {moe_params} "
                     f" --max-sentences {max_sentences} "
@@ -256,22 +257,29 @@ class GenerateMultiModule(NLLBModule):
 def get_type(pair):
     if "-" not in pair:
         return None
-    from examples.nllb.modeling.evaluation.train_example_count import flores200_v4_1
+    from examples.nllb.modeling.evaluation.train_example_count import flores200_public
 
-    train_counts2 = flores200_v4_1.train_counts
-    # 15M, 2-15M,0.1-2M, <0.1M
-    low_limits = {"high": 10000000, "mid": 2000000, "low": 100000, "v_low": 0}
-    high_limits = {"high": 1000000000, "mid": 10000000, "low": 2000000, "v_low": 100000}
+    train_counts2 = flores200_public.train_counts
+    # High resource +1M, low resource 0-1M; Very low resource <0.1M
+    low_limits = {"high": 1000000, "low": 0, "v_low": 0}
+    high_limits = {"high": 10000000000, "low": 1000000, "v_low": 100000}
     lang = pair.split("-")[1]
-    if lang == "eng":
+    if lang == "eng_Latn":
         lang = pair.split("-")[0]
     if lang not in train_counts2:
         print(f"{lang} is not in train_counts")
         return None
     count = train_counts2[lang]
+    resource = None
     for t in low_limits.keys():
         if count >= low_limits[t] and count <= high_limits[t]:
-            return t
+            resource = t
+            break
+    vlow_res = None
+    if count >= low_limits["v_low"] and count <= high_limits["v_low"]:
+        vlow_res = "v_low"
+
+    return resource, vlow_res
 
 
 def get_averages(scores_map, threshold=0):
@@ -280,7 +288,7 @@ def get_averages(scores_map, threshold=0):
     non_eng = defaultdict(list)
     all_pairs = defaultdict(list)
     for pair, score in scores_map.items():
-        resource = get_type(pair)
+        resource, vlow_res = get_type(pair)
         if score < threshold:
             print(f"{pair} {score} is skipped due to threshold")
             continue
@@ -289,14 +297,22 @@ def get_averages(scores_map, threshold=0):
             continue
         all_pairs["all"].append(score)
         all_pairs[resource].append(score)
-        if pair.startswith("eng-"):
+        if vlow_res is not None:
+            all_pairs[vlow_res].append(score)
+        if pair.startswith("eng_Latn-"):
             en_xx[resource].append(score)
+            if vlow_res is not None:
+                en_xx[vlow_res].append(score)
             en_xx["all"].append(score)
-        elif pair.endswith("-eng"):
+        elif pair.endswith("-eng_Latn"):
             xx_en[resource].append(score)
+            if vlow_res is not None:
+                xx_en[vlow_res].append(score)
             xx_en["all"].append(score)
         else:
             non_eng[resource].append(score)
+            if vlow_res is not None:
+                non_eng[vlow_res].append(score)
             non_eng["all"].append(score)
     avg_en_xx = defaultdict(int)
     avg_xx_en = defaultdict(int)
@@ -306,7 +322,7 @@ def get_averages(scores_map, threshold=0):
     averages = [avg_en_xx, avg_xx_en, avg_non_eng, avg_all_pairs]
     for idx, agg in enumerate(averages):
         lst = lists[idx]
-        for resource in ["all", "high", "mid", "low", "v_low"]:
+        for resource in ["all", "high", "low", "v_low"]:
             agg[resource] = round(sum(lst[resource]) / max(len(lst[resource]), 1), 2)
     return {
         "en-xx": avg_en_xx,

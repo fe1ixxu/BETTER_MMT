@@ -4,4 +4,4 @@ defaults:
 _target_: examples.nllb.nllb_lib.SubmititLauncher
 log_folder: executor_logs
 cluster: slurm
-partition: devaccel
+partition: learnfair

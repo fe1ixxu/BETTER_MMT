@@ -2,6 +2,6 @@ name: azure
 data_dir: /data/nllb
 partition: hpc
 constraint:
-flores_path: /data/nllb/flores200
+flores_path: /data/nllb/nllb/flores200_final
 memory_multiplier: 0
 timeout_min: 1000

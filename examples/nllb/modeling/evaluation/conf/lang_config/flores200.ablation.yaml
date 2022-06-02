@@ -1,4 +1,4 @@
-bin_root: flores200.en_xx_en.v4.2.256k
+bin_root: flores200.en_xx_en.v4.4.256k
 
 # sampled is to be used only for testing code
 sampled:
@@ -173,4 +173,3 @@ model_langs:
   - yor
   - yue
   - zho_Hans
-
