@@ -503,9 +503,6 @@ class TransformerDecoderLayerBase(nn.Module):
             module_name=self.__class__.__name__,
             dropout_2d=cfg.dropout_2d,
         )
-        self.moe_dropout_module = FairseqDropout(
-            cfg.moe_dropout or cfg.dropout, module_name=self.__class__.__name__
-        )
         self.quant_noise = cfg.quant_noise_pq
         self.quant_noise_block_size = cfg.quant_noise_pq_block_size
 
