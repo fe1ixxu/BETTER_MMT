@@ -1,6 +1,6 @@
 defaults:
   - default
-  - override cluster: rsc
+  - override cluster: azure
   - override dataset: flores200.full.v4.4
   - override model_type: moe
 
@@ -27,5 +27,5 @@ ddp_backend: fully_sharded
 lr: 0.002
 warmup: 8000
 temp: 1
-max_time_mins: 8000
+max_time_mins: 4320
 

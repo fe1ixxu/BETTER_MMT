@@ -42,3 +42,9 @@ zero2: false
 ssl_task: null
 dae_mask: 0.5
 train_subset: train
+finetune_dict_specs: null
+restore_file: null
+no_save: false
+log_interval: 100
+eval_lang_pairs: null
+reset_dataloader: false

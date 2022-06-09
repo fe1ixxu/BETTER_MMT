@@ -366,12 +366,13 @@ def is_checkpoint_sharded(checkpoint_files) -> bool:
         return True
 
 
-def get_paths_to_load(local_path, suffix="rank-"):
+def get_paths_to_load(local_path, suffix="rank-", replication_count=1):
     checkpoint_files = glob(re.sub(f"{suffix}[0-9]+", f"{suffix}*", local_path))
     if not is_checkpoint_sharded(checkpoint_files):
         return [local_path]
     checkpoint_files_count = len(checkpoint_files)
     world_size = dist_utils.get_data_parallel_world_size()
+    checkpoint_files_count = checkpoint_files_count / replication_count
     fnames = []
     if world_size >= checkpoint_files_count:
         return [local_path]
@@ -432,7 +433,16 @@ def load_checkpoint_to_cpu(
 
     # path to checkpoint...-shared.pt
     shared_path = re.sub("rank-[0-9]+", "shared", local_path)
-    paths_to_load = get_paths_to_load(local_path, suffix="rank-" if is_moe else "shard")
+    # this should be num_training_gpus // num_experts
+    replication_count = (
+        arg_overrides.get("replication_count", 1) if arg_overrides else 1
+    )
+    paths_to_load = get_paths_to_load(
+        local_path,
+        suffix="rank-" if is_moe else "shard",
+        replication_count=replication_count,
+    )
+
     if is_moe and os.path.exists(shared_path):
         expert_state = moe_checkpoint_utils.load_expert_state(
             paths_to_load

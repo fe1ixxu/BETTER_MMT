@@ -286,6 +286,12 @@ def add_extra_options_func(parser):
         type=str,
         help="valid subset",
     )
+    parser.add_argument(
+        "--reset-dataloader",
+        action="store_true",
+        default=False,
+        help="reset data loader",
+    )
     parser.add_argument("--keep-interval-updates", default=10, type=int)
     parser.add_argument("--symlink-best-and-last-checkpoints", action="store_true")
 
@@ -322,6 +328,30 @@ def add_extra_options_func(parser):
         default=False,
         action="store_true",
         help="Add data tags",
+    )
+    parser.add_argument(
+        "--finetune-dict-specs",
+        type=str,
+        default=None,
+        help="dict specs for mono DAE or mono LM",
+    )
+    parser.add_argument(
+        "--restore-file",
+        type=str,
+        default=None,
+        help="restore checkpoint file",
+    )
+    parser.add_argument(
+        "--no-save",
+        default=False,
+        action="store_true",
+        help="don't save checkpoint",
+    )
+    parser.add_argument(
+        "--log-interval",
+        default=100,
+        type=int,
+        help="log updates interval",
     )
 
     parser.add_argument("--moe-gt-drp", type=float, default=0.0)
@@ -395,7 +425,7 @@ def get_grid(args):
         ),
         hyperparam("--seed", [args.seed], save_dir_key=lambda val: f"seed{val}"),
         hyperparam("--log-format", "json"),
-        hyperparam("--log-interval", 100),
+        hyperparam("--log-interval", args.log_interval),
         hyperparam(
             "--validate-interval-updates",
             args.validate_interval_updates,
@@ -470,6 +500,14 @@ def get_grid(args):
         grids.append(hyperparam("--min-params-to-wrap", int(1e8)))
         if args.zero2:
             grids.append(hyperparam("--no-reshard-after-forward"))
+    if args.finetune_dict_specs is not None:
+        grids.append(hyperparam("--finetune-dict-specs", args.finetune_dict_specs))
+    if args.restore_file is not None:
+        grids.append(hyperparam("--restore-file", args.restore_file))
+    if args.no_save:
+        grids.append(hyperparam("--no-save", True, binary_flag=True))
+    if args.reset_dataloader:
+        grids.append(hyperparam("--reset-dataloader", True, binary_flag=True))
     # moe
     if args.moe:
         if args.moe_freq > 0:

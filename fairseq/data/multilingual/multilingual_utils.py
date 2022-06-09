@@ -63,6 +63,7 @@ def augment_dictionary(
     extra_data: Optional[Dict[str, str]] = None,
     add_data_source_prefix_tags: bool = False,
     add_ssl_task_tokens: bool = False,
+    finetune_dict_specs: Optional[Dict[str, str]] = None,
 ) -> None:
     for spec in langtoks_specs:
         for language in language_list:
@@ -70,11 +71,18 @@ def augment_dictionary(
                 get_lang_tok(lang=language, lang_tok_style=lang_tok_style, spec=spec)
             )
 
-    if lang_tok_style == LangTokStyle.mbart.value or (
-        extra_data is not None
-        and (
-            (LangTokSpec.mono_dae.value in extra_data)
-            or (LangTokSpec.mono_mixed_task.value in extra_data)
+    if (
+        lang_tok_style == LangTokStyle.mbart.value
+        or (
+            extra_data is not None
+            and (
+                (LangTokSpec.mono_dae.value in extra_data)
+                or (LangTokSpec.mono_mixed_task.value in extra_data)
+            )
+        )
+        or (
+            finetune_dict_specs is not None
+            and LangTokSpec.mono_dae.value in finetune_dict_specs
         )
     ):
         dictionary.add_symbol("<mask>")
@@ -86,9 +94,16 @@ def augment_dictionary(
         for name, tok in DATA_SOURCE_PREFIX_TAGS.items():
             dictionary.add_symbol(tok)
 
-    if extra_data is not None and (
-        (LangTokSpec.mono_lm.value in extra_data)
-        or (LangTokSpec.mono_mixed_task.value in extra_data)
+    if (
+        extra_data is not None
+        and (
+            (LangTokSpec.mono_lm.value in extra_data)
+            or (LangTokSpec.mono_mixed_task.value in extra_data)
+        )
+        or (
+            finetune_dict_specs is not None
+            and LangTokSpec.mono_lm.value in finetune_dict_specs
+        )
     ):
         if add_ssl_task_tokens:
             dictionary.add_symbol("__lm__")

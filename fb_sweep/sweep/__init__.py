@@ -149,7 +149,7 @@ def get_args(add_extra_options_func=None, input_args: Optional[List[str]] = None
                 )
                 # if needed, create a container for this user on the Azure blob account
                 cmd = [
-                    "/shared/home/myleott/bin/azcopy",
+                    "/shared/home/shru/bin/azcopy_linux_amd64_10.12.1/azcopy",
                     "make",
                     o._replace(path=os.path.dirname(o.path)).geturl(),
                 ]

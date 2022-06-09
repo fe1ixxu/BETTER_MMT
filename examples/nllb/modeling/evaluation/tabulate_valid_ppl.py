@@ -3,18 +3,21 @@ import json
 import sys
 from collections import defaultdict
 
+ENG = "eng_Latn"
+
 
 def get_type(pair):
     if "-" not in pair:
         return None
-    from examples.nllb.modeling.evaluation.train_example_count import flores200_v4_1
-    train_counts2 = flores200_v4_1.train_counts
+    from examples.nllb.modeling.evaluation.train_example_count import flores200_public
+
+    train_counts2 = flores200_public.train_counts
     # 15M, 2-15M,0.1-2M, <0.1M
-    low_limits =  {'high':   10000000, 'mid':  2000000, 'low':  100000, 'v_low': 0}
-    high_limits = {'high': 1000000000, 'mid': 10000000, 'low': 2000000, 'v_low': 100000}
-    lang = pair.split('-')[1]
-    if lang == "eng":
-        lang = pair.split('-')[0]
+    low_limits = {"high": 10000000, "mid": 2000000, "low": 100000, "v_low": 0}
+    high_limits = {"high": 1000000000, "mid": 10000000, "low": 2000000, "v_low": 100000}
+    lang = pair.split("-")[1]
+    if lang == ENG:
+        lang = pair.split("-")[0]
     if lang not in train_counts2:
         print(f"{lang} is not in train_counts")
         return None
@@ -39,17 +42,17 @@ def get_averages(scores_map, threshold=50):
         if resource is None:
             print(f"{pair} {score} is skipped due to missing resource level")
             continue
-        all_pairs['all'].append(score)
+        all_pairs["all"].append(score)
         all_pairs[resource].append(score)
-        if pair.startswith("eng-"):
+        if pair.startswith(f"{ENG}-"):
             en_xx[resource].append(score)
-            en_xx['all'].append(score)
-        elif pair.endswith("-eng"):
+            en_xx["all"].append(score)
+        elif pair.endswith(f"-{ENG}"):
             xx_en[resource].append(score)
-            xx_en['all'].append(score)
+            xx_en["all"].append(score)
         else:
             non_eng[resource].append(score)
-            non_eng['all'].append(score)
+            non_eng["all"].append(score)
     print(counts)
     avg_en_xx = defaultdict(int)
     avg_xx_en = defaultdict(int)
@@ -59,15 +62,18 @@ def get_averages(scores_map, threshold=50):
     averages = [avg_en_xx, avg_xx_en, avg_non_eng, avg_all_pairs]
     for idx, agg in enumerate(averages):
         lst = lists[idx]
-        for resource in ['all', 'high', 'mid', 'low', 'v_low']:
-            agg[resource] = round(sum(lst[resource])/max(len(lst[resource]), 1), 2)
-    return {'en-xx': avg_en_xx, 'xx-en': avg_xx_en, 'non-eng': avg_non_eng, 'all': avg_all_pairs}
+        for resource in ["all", "high", "mid", "low", "v_low"]:
+            agg[resource] = round(sum(lst[resource]) / max(len(lst[resource]), 1), 2)
+    return {
+        "en-xx": avg_en_xx,
+        "xx-en": avg_xx_en,
+        "non-eng": avg_non_eng,
+        "all": avg_all_pairs,
+    }
 
 
 def get_parser():
-    parser = argparse.ArgumentParser(
-        description="tabulates valid PPL"
-    )
+    parser = argparse.ArgumentParser(description="tabulates valid PPL")
     # fmt: off
     parser.add_argument(
         '--train-log',
@@ -122,8 +128,8 @@ def main():
                     valid_ppls[updates][pair] = ppl
 
     pairs = valid_ppls[update_values[0]].keys()
-    en_xx_pairs = [p for p in pairs if p.startswith("eng-")]
-    xx_en_pairs = [p for p in pairs if p.endswith("-eng")]
+    en_xx_pairs = [p for p in pairs if p.startswith(f"{ENG}-")]
+    xx_en_pairs = [p for p in pairs if p.endswith(f"-{ENG}")]
     non_en_pairs = [p for p in pairs if "eng" not in p]
     pairs = en_xx_pairs + non_en_pairs + xx_en_pairs
     rows = defaultdict(list)
@@ -134,7 +140,7 @@ def main():
                 rows[f"{subset}_{res}"].append(str(val))
         for pair in pairs:
             rows[pair].append(str(valid_ppls[updates][pair]))
-    all_updates = '\t'.join([str(v) for v in update_values])
+    all_updates = "\t".join([str(v) for v in update_values])
     print(f"valid_ppl\t{all_updates}")
     if args.output_file is not None:
         fout = open(args.output_file, "w")

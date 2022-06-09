@@ -58,6 +58,8 @@ class GenerateMultiConfig:
     fp16: bool = False
     fairseq_root: str = "."
     metrics_only: bool = False
+    replication_count: int = 1
+    finetune_dict_specs: tp.Optional[str] = None
 
 
 @dataclass
@@ -117,9 +119,10 @@ class GenerateMultiModule(NLLBModule):
     def requirements(self):
         if self.config.model_type == "moe":
             gpus = 8
+            num_nodes = 2
             req = DistributedRequirements(
                 tasks_per_node=1,
-                nodes=1,
+                nodes=num_nodes,
                 gpus_per_node=gpus,
                 cpus_per_task=gpus * 10,
                 mem_gb=gpus * self.config.cluster.memory_multiplier,
@@ -149,8 +152,14 @@ class GenerateMultiModule(NLLBModule):
             try:
                 src = lang_pair.split("-")[0]
                 tgt = lang_pair.split("-")[1]
+                if self.config.finetune_dict_specs is not None:
+                    finetune_dict_specs = (
+                        f' --finetune-dict-specs "{self.config.finetune_dict_specs}"'
+                    )
+                else:
+                    finetune_dict_specs = ""
                 if self.config.model_type == "moe":
-                    max_sentences = 16
+                    max_sentences = 36
                     cap = 1.0
                     req = self.requirements()
                     world_size = req.nodes * req.gpus_per_node
@@ -160,6 +169,7 @@ class GenerateMultiModule(NLLBModule):
                         "moe_eval_capacity_token_fraction": cap,
                         "use_moe_pad_mask": False,
                         "pass_tokens_transformer_layer": False,
+                        "replication_count": self.config.replication_count,
                     }
                     moe_params = (
                         "--is-moe "
@@ -178,6 +188,15 @@ class GenerateMultiModule(NLLBModule):
                     f"{src}-{tgt}_{job_config.checkpoint}_{job_config.gen_split}",
                 )
                 os.makedirs(out_dir, exist_ok=True)
+                # check if generation was completed before
+                has_completed_before = False
+                if os.path.exists(os.path.join(out_dir, "bleu.results")):
+                    with open(os.path.join(out_dir, "bleu.results"), "r") as f:
+                        for line in f.readlines():
+                            if "BLEU" in line:
+                                has_completed_before = True
+                if has_completed_before:
+                    return
                 checkpoint_name = job_config.checkpoint
                 if self.config.model_type == "dense":
                     checkpoint_name += "-shard0"
@@ -205,8 +224,9 @@ class GenerateMultiModule(NLLBModule):
                     " --add-data-source-prefix-tags "
                     f" {'--fp16' if self.config.fp16 else ''}"
                     f" {moe_params} "
+                    f" {finetune_dict_specs} "
                     f" --max-sentences {max_sentences} "
-                    f" --results-path {out_dir}"
+                    f" --results-path {out_dir} >> {out_dir}/eval.out 2>&1 "
                 )
                 post_proc_command = (
                     f"/bin/bash -o pipefail -c '"

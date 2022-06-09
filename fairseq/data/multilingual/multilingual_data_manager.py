@@ -491,6 +491,13 @@ class MultilingualDatasetManager(object):
             help="comma-separated list of evaluation language pairs: en-de,en-fr,de-fr",
             action=FileContentsAction,
         )
+        parser.add_argument(
+            "--finetune-dict-specs",
+            help='a dictionary of which finetuning dictionary setups to mimic, \
+                            e.g. {"mono_dae": "", "mono_lm": ""}',
+            default=None,
+            type=lambda uf: eval_str_dict(uf, type=str),
+        )
 
     @classmethod
     def load_langs(cls, args, **kwargs):
@@ -604,6 +611,7 @@ class MultilingualDatasetManager(object):
                 extra_data=args.extra_data,
                 add_data_source_prefix_tags=args.add_data_source_prefix_tags,
                 add_ssl_task_tokens=args.add_ssl_task_tokens,
+                finetune_dict_specs=args.finetune_dict_specs,
             )
             return d
 
@@ -892,7 +900,6 @@ class MultilingualDatasetManager(object):
                 tgt_datasets.append(
                     self.load_data(prefix_tgt + tgt, tgt_dict, dataset_impl)
                 )
-
                 logger.info(
                     "{} {} {}-{} {} examples".format(
                         data_path, split_k, src, tgt, len(src_datasets[-1])

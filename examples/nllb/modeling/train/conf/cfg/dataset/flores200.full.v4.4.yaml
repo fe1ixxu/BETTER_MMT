@@ -8,7 +8,7 @@ lang_pairs_file: "examples/nllb/modeling/scripts/flores200/lang_pairs.txt"
 data_prefix:
   fair: /large_experiments/nllb/mmt/multilingual_bin/flores200.en_xx_en.v4.4.256k/data_bin
   rsc: /checkpoint/nllb/data/flores200.en_xx_en.v4.4.256k/data_bin
-  azure: /data/nllb/flores200.en_xx_en.v4.4.256k/data_bin
+  azure: /data/nllb/nllb/flores200.en_xx_en.v4.4.256k/data_bin
 
 mono_num_shards: 16
 mono_data_prefix:

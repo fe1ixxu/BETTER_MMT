@@ -23,3 +23,5 @@ output_dir: ${model_folder}
 beam_size: 4
 fp16: true
 metrics_only: false
+replication_count: 2
+finetune_dict_specs: null
