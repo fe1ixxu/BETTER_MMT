@@ -442,7 +442,6 @@ def load_checkpoint_to_cpu(
         suffix="rank-" if is_moe else "shard",
         replication_count=replication_count,
     )
-
     if is_moe and os.path.exists(shared_path):
         expert_state = moe_checkpoint_utils.load_expert_state(
             paths_to_load

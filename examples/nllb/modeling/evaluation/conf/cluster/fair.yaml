@@ -3,5 +3,6 @@ data_dir: /large_experiments/nllb/mmt/multilingual_bin
 partition: learnaccel
 constraint: volta32gb
 flores_path: /large_experiments/nllb/mmt/flores200
+non_flores_path: /large_experiments/nllb/mmt/non_flores_evaluation_data
 memory_multiplier: 50
 timeout_min: 1000

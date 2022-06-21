@@ -34,7 +34,11 @@ class LangConfig:
     bin_root: str = MISSING
     all: tp.List[str] = MISSING
     sampled: tp.List[str] = MISSING
-    model_langs: tp.List[str] = MISSING
+
+
+@dataclass
+class ModelConfig:
+    langs: tp.List[str] = MISSING
 
 
 @dataclass
@@ -44,6 +48,7 @@ class GenerateMultiConfig:
     # use group: fair or azure
     cluster: ClusterConfig = ClusterConfig()
     lang_config: LangConfig = LangConfig()
+    model_config: ModelConfig = ModelConfig()
     # all or sample
     eval_on: str = "sampled"
     lang_pairs_per_job: int = 1
@@ -60,6 +65,9 @@ class GenerateMultiConfig:
     metrics_only: bool = False
     replication_count: int = 1
     finetune_dict_specs: tp.Optional[str] = None
+    add_data_source_prefix_tags: bool = False
+    moe_eval_cap: float = 1.0
+    datalabel: str = ""
 
 
 @dataclass
@@ -67,6 +75,7 @@ class JobConfig:
     gen_split: str
     checkpoint: str
     lang_pairs: tp.List[str]
+    datalabel: str = ""
 
 
 class GenerateMultiModule(NLLBModule):
@@ -110,7 +119,12 @@ class GenerateMultiModule(NLLBModule):
                 filtered_pairs.append(lang_pair)
         lang_pairs_chunks = chunk(filtered_pairs, self.config.lang_pairs_per_job)
         return [
-            JobConfig(gen_split=split, checkpoint=chk, lang_pairs=lang_pairs)
+            JobConfig(
+                gen_split=split,
+                checkpoint=chk,
+                lang_pairs=lang_pairs,
+                datalabel=self.config.datalabel,
+            )
             for split in self.config.gen_splits
             for chk in self.config.checkpoints
             for lang_pairs in lang_pairs_chunks
@@ -160,7 +174,7 @@ class GenerateMultiModule(NLLBModule):
                     finetune_dict_specs = ""
                 if self.config.model_type == "moe":
                     max_sentences = 36
-                    cap = 1.0
+                    cap = self.config.moe_eval_cap
                     req = self.requirements()
                     world_size = req.nodes * req.gpus_per_node
                     port = (randint(0, 32767) % 119) + 15_000
@@ -182,11 +196,19 @@ class GenerateMultiModule(NLLBModule):
                     max_sentences = 50
                     cap = "no_cap"
 
-                out_dir = os.path.join(
-                    self.config.output_dir,
-                    f"gen_output_{cap}",
-                    f"{src}-{tgt}_{job_config.checkpoint}_{job_config.gen_split}",
-                )
+                if job_config.datalabel:
+                    out_dir = os.path.join(
+                        self.config.output_dir,
+                        f"gen_output_{job_config.datalabel}_{cap}",
+                        f"{src}-{tgt}_{job_config.checkpoint}_{job_config.gen_split}",
+                    )
+                else:
+                    out_dir = os.path.join(
+                        self.config.output_dir,
+                        f"gen_output_{cap}",
+                        f"{src}-{tgt}_{job_config.checkpoint}_{job_config.gen_split}",
+                    )
+
                 os.makedirs(out_dir, exist_ok=True)
                 # check if generation was completed before
                 has_completed_before = False
@@ -209,7 +231,7 @@ class GenerateMultiModule(NLLBModule):
                     f" {self.config.data} "
                     f" --path {model} "
                     f" --task translation_multi_simple_epoch "
-                    f" --langs \"{','.join(self.config.lang_config.model_langs)}\" "
+                    f" --langs \"{','.join(self.config.model_config.langs)}\" "
                     f'--lang-pairs "{src}-{tgt}"'
                     f" --source-lang {src} "
                     f" --target-lang {tgt} "
@@ -221,7 +243,7 @@ class GenerateMultiModule(NLLBModule):
                     f" --sentencepiece-model {self.config.spm_model} "
                     " --sacrebleu "
                     " --enable-m2m-validation "
-                    " --add-data-source-prefix-tags "
+                    f"{'--add-data-source-prefix-tags' if self.config.add_data_source_prefix_tags else ''}"
                     f" {'--fp16' if self.config.fp16 else ''}"
                     f" {moe_params} "
                     f" {finetune_dict_specs} "
@@ -237,12 +259,23 @@ class GenerateMultiModule(NLLBModule):
                     + " | sed 's/^<MINED_DATA> //g' "
                     + f" > {out_dir}/gen_best.output"
                 )
-                flores_split = "dev" if job_config.gen_split == "valid" else "devtest"
-                ref_file = os.path.join(
-                    self.config.cluster.flores_path,
-                    flores_split,
-                    f"{tgt}.{flores_split}",
-                )
+                if job_config.datalabel:
+                    ref_split = "dev" if job_config.gen_split == "valid" else "test"
+                    ref_file = os.path.join(
+                        self.config.cluster.non_flores_path,
+                        job_config.datalabel,
+                        f"{ref_split}.{src}-{tgt}.{tgt}",
+                    )
+                else:
+                    # Default evaluation on Flores
+                    flores_split = (
+                        "dev" if job_config.gen_split == "valid" else "devtest"
+                    )
+                    ref_file = os.path.join(
+                        self.config.cluster.flores_path,
+                        flores_split,
+                        f"{tgt}.{flores_split}",
+                    )
                 # Install `pip install git+https://github.com/mjpost/sacrebleu.git@master`
                 # spm BLEU Eval
                 bleu_command = (
@@ -255,8 +288,25 @@ class GenerateMultiModule(NLLBModule):
                     f"sacrebleu -m chrf --chrf-word-order 2 -tok spm {ref_file} < {out_dir}/gen_best.output "
                     + f" > {out_dir}/chrf.results"
                 )
+                if job_config.datalabel:
+                    # --tok intl (--zh for zh)
+                    sacrebleu_command = (
+                        f"SACREBLEU_FORMAT=text "
+                        + f"sacrebleu -tok {'zh' if tgt == 'zho_Hans' else 'intl'}"
+                        + f" {ref_file} < {out_dir}/gen_best.output "
+                        + f" > {out_dir}/sacrebleu.results"
+                    )
+                else:
+                    sacrebleu_command = ""
+
                 full_command = "\n".join(
-                    [generate_command, post_proc_command, bleu_command, chrf_command]
+                    [
+                        generate_command,
+                        post_proc_command,
+                        bleu_command,
+                        chrf_command,
+                        sacrebleu_command,
+                    ]
                 )
                 if self.config.get("debug", False):
                     print(full_command)
@@ -278,17 +328,23 @@ def get_type(pair):
     if "-" not in pair:
         return None
     from examples.nllb.modeling.evaluation.train_example_count import flores200_public
+    from examples.nllb.modeling.evaluation.train_example_count.code_mapping import (
+        lang_code_map,
+    )
 
     train_counts2 = flores200_public.train_counts
     # High resource +1M, low resource 0-1M; Very low resource <0.1M
     low_limits = {"high": 1000000, "low": 0, "v_low": 0}
     high_limits = {"high": 10000000000, "low": 1000000, "v_low": 100000}
     lang = pair.split("-")[1]
-    if lang == "eng_Latn":
+    if lang == "eng_Latn" or lang == "eng":
         lang = pair.split("-")[0]
     if lang not in train_counts2:
-        print(f"{lang} is not in train_counts")
-        return None
+        if lang in lang_code_map:
+            lang = lang_code_map[lang]
+        if lang not in train_counts2:
+            print(f"{lang} is not in train_counts")
+            return None
     count = train_counts2[lang]
     resource = None
     for t in low_limits.keys():
@@ -354,9 +410,20 @@ def get_averages(scores_map, threshold=0):
 
 async def tabulate(config: DictConfig) -> None:
     if config.model_type == "moe":
-        cap = "1.0"
+        cap = config.moe_eval_cap
     else:
         cap = "no_cap"
+    if config.datalabel:
+        out_dir = os.path.join(
+            config.output_dir,
+            f"gen_output_{config.datalabel}_{cap}",
+        )
+    else:
+        out_dir = os.path.join(
+            config.output_dir,
+            f"gen_output_{cap}",
+        )
+
     out_dir = os.path.join(config.output_dir, f"gen_output_{cap}")
     lang_pairs = config.lang_config.all
 
