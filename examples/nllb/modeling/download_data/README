@@ -4,7 +4,7 @@ to automate download of many publicly available sources of MT data
 which were used to train NLLB models. You should provide a parent
 directory into which to save the data. Usage is as follows:
 
-```
+``` bash
 python download_parallel_corpora.py   --directory $DOWNLOAD_DIRECTORY
 ```
 
