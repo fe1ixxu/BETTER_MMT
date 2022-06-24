@@ -354,14 +354,11 @@ def add_extra_options_func(parser):
         help="log updates interval",
     )
 
-    parser.add_argument("--moe-gt-drp", type=float, default=0.0)
-    parser.add_argument("--moe-tok-drp", type=float, default=0.0)
-    parser.add_argument("--all-tok-drp", type=float, default=0.0)
-    parser.add_argument("--moe-unit-drp", type=float, default=0.0)
-    parser.add_argument("--moe-clsr", action="store_true", default=0.0)
-    parser.add_argument("--clsr-wt", type=float, default=0.1)
-    parser.add_argument("--clsr-p", type=float, default=0.8)
-    parser.add_argument("--clsr-gt-drp", type=float, default=0.0)
+    parser.add_argument("--moe-eom", type=float, default=0.0)
+    parser.add_argument("--moe-cmr", action="store_true", default=0.0)
+    parser.add_argument("--cmr-wt", type=float, default=0.1)
+    parser.add_argument("--cmr-p", type=float, default=0.8)
+    parser.add_argument("--cmr-gate-drop", type=float, default=0.0)
 
 
 def get_grid(args):
@@ -551,61 +548,35 @@ def get_grid(args):
                 # hyperparam("--use-tutel-moe"),
             ]
         )
-        if args.moe_gt_drp > 0:  # row 4
+        if args.moe_eom > 0:
             grids.append(
                 hyperparam(
-                    "--moe-gate-drop",
-                    [args.moe_gt_drp],
-                    save_dir_key=lambda val: f"mgtdrp{val}",
+                    "--moe-eom",
+                    [args.moe_eom],
+                    save_dir_key=lambda val: f"eom{val}",
                 )
             )
-        if args.moe_tok_drp > 0:  # row 5
+        if args.moe_cmr:
+            grids.append(hyperparam("--moe-cmr", save_dir_key=lambda val: f"cmr{val}"))
             grids.append(
                 hyperparam(
-                    "--moe-tok-dropout",
-                    [args.moe_tok_drp],
-                    save_dir_key=lambda val: f"mtdrp{val}",
-                )
-            )
-        if args.all_tok_drp > 0:  # row 6
-            grids.append(
-                hyperparam(
-                    "--dropout-2d",
-                    [args.all_tok_drp],
-                    save_dir_key=lambda val: f"all_tok_drp{val}",
-                )
-            )
-        if args.moe_unit_drp > 0:  # row 7
-            grids.append(
-                hyperparam(
-                    "--moe-only-dropout",
-                    [args.moe_unit_drp],
-                    save_dir_key=lambda val: f"moe_unit_drp{val}",
-                )
-            )
-        if args.moe_clsr:
-            grids.append(
-                hyperparam("--moe-clsr", save_dir_key=lambda val: f"clsr{val}")
-            )
-            grids.append(
-                hyperparam(
-                    "--clsr-gate-loss-wt",
-                    [args.clsr_wt],
+                    "--cmr-gate-loss-wt",
+                    [args.cmr_wt],
                     save_dir_key=lambda val: f"c_wt{val}",
                 )
             )
             grids.append(
                 hyperparam(
-                    "--clsr-gate-loss-p",
-                    [args.clsr_p],
+                    "--cmr-gate-loss-p",
+                    [args.cmr_p],
                     save_dir_key=lambda val: f"c_p{val}",
                 )
             )
-            if args.clsr_gt_drp > 0:
+            if args.cmr_gate_drop > 0:
                 grids.append(
                     hyperparam(
-                        "--clsr-gate-drop",
-                        [args.clsr_gt_drp],
+                        "--cmr-gate-drop",
+                        [args.cmr_gate_drop],
                         save_dir_key=lambda val: f"c_drp{val}",
                     )
                 )

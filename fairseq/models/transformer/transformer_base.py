@@ -70,7 +70,7 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
 
         src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
 
-        if cfg.clsr_log_lang_gates:
+        if cfg.cmr_log_lang_gates:
             cfg.lang_idx = getattr(task, "lang_idx", None)
             assert cfg.lang_idx is not None
 

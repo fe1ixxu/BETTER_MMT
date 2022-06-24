@@ -11,4 +11,4 @@ python examples/nllb/modeling/train/train_script.py \
     cfg.resume_finished=true \
     cfg.dropout=${drop} \
     cfg.model_type.expert_count=128 \
-    cfg.model_type.moe_param=" --moe --moe-freq ${moe_freq} --moe-tok-drp $2 " \
+    cfg.model_type.moe_param=" --moe --moe-freq ${moe_freq} --moe-eom $2 " \

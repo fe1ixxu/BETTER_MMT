@@ -1,4 +1,4 @@
-# bash run_sweep $drop $moe_tok_drp
+# bash run_sweep $drop $moe_eom
 
 drop=$1
 moe_freq=4
@@ -12,7 +12,7 @@ python examples/nllb/modeling/train/train_script.py \
     cfg.resume_finished=true \
     cfg.dropout=${drop} \
     cfg.model_type.expert_count=128 \
-    cfg.model_type.moe_param=" --moe --moe-freq ${moe_freq} --moe-tok-drp $2 " \
+    cfg.model_type.moe_param=" --moe --moe-freq ${moe_freq} --moe-eom $2 " \
     cfg.restore_file="/data/nllb/users/shru/checkpoint/flores200.full.v4.4/sweep.moe_drop/moe128.mu2.mf${moe_freq}.uf1.tmp1.lr0.002.drop0.3.maxtok4096.seed2.max_pos512.shem.NBF.moe_w0.01.all.mtdrp0.2.entsrc.det.ELS24.DLS24.encffnx8192.decffnx8192.E2048.H16.ATTDRP0.1.RELDRP0.0.ngpu256/checkpoint_12_200000.pt" \
     cfg.no_save=true \
     cfg.validate_interval_updates=1 \

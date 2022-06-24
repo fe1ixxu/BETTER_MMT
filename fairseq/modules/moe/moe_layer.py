@@ -94,7 +94,6 @@ class MOELayer(Base):
         max_positions: Optional[int] = None,
         init_model_on_gpu: Optional[bool] = False,
         tok_dropout: float = 0.0,
-        moe_only_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.gate = gate
@@ -127,7 +126,6 @@ class MOELayer(Base):
         )
         self.max_positions = max_positions
         self.tok_dropout = tok_dropout
-        self.moe_only_dropout = moe_only_dropout
 
     def forward(
         self, *input: Tensor, input_padding_mask=None, prefix_tokens=None, **kwargs: Any
@@ -317,11 +315,6 @@ class MOELayer(Base):
                 expert_output = mask.unsqueeze(-1) * expert_output
             else:
                 expert_output = expert_output * (1 - self.tok_dropout)
-        if self.moe_only_dropout > 0.0:
-            # unit-wise dropout
-            expert_output = F.dropout(
-                expert_output, self.moe_only_dropout, self.training
-            )
 
         # Re-shape back: gecm -> ecm
         expert_output = expert_output.reshape(

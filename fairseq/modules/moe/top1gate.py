@@ -36,8 +36,6 @@ def top1gating(
     eval_mode=False,
     moe_eval_capacity_token_fraction=EVAL_CAPACITY_TOKEN_FRACTION,
     moe_eval_capacity_length=None,
-    moe_gate_drop=0.0,
-    moe_gate_drop2=0.0,
     use_tutel=False,
     prefix_tokens=None,
 ) -> Tuple[Tensor, Tensor, Tensor, Dict]:
@@ -168,8 +166,6 @@ class Top1Gate(torch.nn.Module):
         input_noise_type=None,
         capacity_factor=1.0,
         moe_eval_capacity_token_fraction=EVAL_CAPACITY_TOKEN_FRACTION,
-        moe_gate_drop=0.0,
-        moe_gate_drop2=0.0,
         use_tutel=False,
         init_model_on_gpu=False,
     ) -> None:
@@ -183,8 +179,6 @@ class Top1Gate(torch.nn.Module):
         self.input_noise_type = input_noise_type
         self.capacity_factor = capacity_factor
         self.moe_eval_capacity_token_fraction = moe_eval_capacity_token_fraction
-        self.moe_gate_drop = moe_gate_drop
-        self.moe_gate_drop2 = moe_gate_drop2
         self.use_tutel = use_tutel
 
     def forward(
@@ -203,8 +197,6 @@ class Top1Gate(torch.nn.Module):
             eval_mode=not self.training,
             moe_eval_capacity_token_fraction=self.moe_eval_capacity_token_fraction,
             moe_eval_capacity_length=moe_eval_capacity_length,
-            moe_gate_drop=self.moe_gate_drop,
-            moe_gate_drop2=self.moe_gate_drop2,
             use_tutel=self.use_tutel,
             prefix_tokens=prefix_tokens,
         )

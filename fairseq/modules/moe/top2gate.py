@@ -64,8 +64,6 @@ def top2gating(
     moe_eval_capacity_token_fraction=0.25,
     batch_prioritized_routing=False,
     moe_eval_capacity_length=None,
-    moe_gate_drop=0.0,
-    moe_gate_drop2=0.0,
     use_tutel=False,
     prefix_tokens=None,
 ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -75,24 +73,6 @@ def top2gating(
         orig_dtype = logits.dtype
         logits = logits.float()
     gates = F.softmax(logits, dim=1)
-
-    if moe_gate_drop > 0:
-        # option 1: set expert 0 to 0 prob, it's reserved for shared
-
-        # same as gates[:, 0] = 0, but avoids overwriting gradient
-        zero_mask = torch.ones_like(gates, dtype=torch.bool)
-        zero_mask[:, 0] = False
-        gates = gates * zero_mask
-        norm = gates.sum(dim=-1).clamp(1e-5).unsqueeze(-1)
-        gates = gates / norm
-
-    if moe_gate_drop2 > 0:
-        # option 2: apply dropout after softmax and normalize
-        #   Main effect is routing to 3rd top expert if one of top-2 are dropped out
-        #   Note: this would be a more standard MOE gating dropout implementation
-        gates = F.dropout(gates, moe_gate_drop2, not eval_mode)
-        norm = gates.sum(dim=-1).clamp(1e-5).unsqueeze(-1)
-        gates = gates / norm
 
     metadata["entropy_gating"] = entropy(probs=gates).mean().detach()
     # gates has shape of SE
@@ -122,23 +102,6 @@ def top2gating(
     logits_except1 = logits_w_noise.masked_fill(mask1.bool(), float("-inf"))
     indices2_s = torch.argmax(logits_except1, dim=1, keepdim=True)
     mask2 = one_hot(indices2_s, num_experts)
-
-    if moe_gate_drop > 0:
-        # option 1: dropout before applying mask1/mask2
-        mask1_, mask2_ = mask1.bool(), mask2.bool()
-        mask1 = F.dropout(mask1.float(), moe_gate_drop, not eval_mode).long()
-        mask2 = F.dropout(mask2.float(), moe_gate_drop, not eval_mode).long()
-        # if a top-2 expert was dropped out, set mask1 and mask2 to expert 0
-        # and fill expert 0 probs with the dropped expert's gate prob
-        dropped_mask1 = (mask1 != mask1_).any(dim=-1)
-        dropped_mask2 = (mask2 != mask2_).any(dim=-1)
-        mask1[dropped_mask1, 0] = 1
-        mask2[dropped_mask2, 0] = 1
-        gates[dropped_mask1, 0] = gates[mask1_][dropped_mask1]
-        gates[dropped_mask2, 0] = gates[mask2_][dropped_mask2]
-        # in-place version of gates[mask1_][dropped_mask1] = 0
-        gates[dropped_mask1, torch.where(mask1_[dropped_mask1])[1]] = 0
-        gates[dropped_mask2, torch.where(mask2_[dropped_mask2])[1]] = 0
 
     gates1_s = (gates * mask1).sum(dim=1)
     gates2_s = (gates * mask2).sum(dim=1)
@@ -345,8 +308,6 @@ class Top2Gate(torch.nn.Module):
         normalize_gate_prob_before_dropping=False,
         moe_eval_capacity_token_fraction=0.25,
         batch_prioritized_routing=False,
-        moe_gate_drop=0.0,
-        moe_gate_drop2=0.0,
         use_tutel=False,
         init_model_on_gpu=False,
     ) -> None:
@@ -359,8 +320,6 @@ class Top2Gate(torch.nn.Module):
         self.normalize_gate_prob_before_dropping = normalize_gate_prob_before_dropping
         self.moe_eval_capacity_token_fraction = moe_eval_capacity_token_fraction
         self.batch_prioritized_routing = batch_prioritized_routing
-        self.moe_gate_drop = moe_gate_drop
-        self.moe_gate_drop2 = moe_gate_drop2
         self.use_tutel = use_tutel
 
     def forward(self, input: torch.Tensor, mask: Optional[torch.Tensor] = None, moe_eval_capacity_length: Optional[int] = None, prefix_tokens: Optional[torch.Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
@@ -375,8 +334,6 @@ class Top2Gate(torch.nn.Module):
             moe_eval_capacity_token_fraction=self.moe_eval_capacity_token_fraction,
             batch_prioritized_routing=self.batch_prioritized_routing,
             moe_eval_capacity_length=moe_eval_capacity_length,
-            moe_gate_drop=self.moe_gate_drop,
-            moe_gate_drop2=self.moe_gate_drop2,
             use_tutel=self.use_tutel,
             prefix_tokens=prefix_tokens,
         )

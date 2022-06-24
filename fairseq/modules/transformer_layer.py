@@ -22,7 +22,7 @@ from fairseq.modules.fused_bias_gelu import (
 )
 from fairseq.modules.fused_bias_relu_squared import fused_bias_relu_squared
 from fairseq.modules.linear import Linear
-from fairseq.modules.moe import CLSRLayer, MOELayer, Top1Gate, Top2Gate
+from fairseq.modules.moe import CMRLayer, MOELayer, Top1Gate, Top2Gate
 from fairseq.modules.quant_noise import quant_noise
 from fairseq.utils import relu_squared
 
@@ -100,11 +100,7 @@ class FeedForwardNetwork(nn.Module):
             init_model_on_gpu=init_model_on_gpu,
         )
         self.dropout_module = (
-            FairseqDropout(
-                cfg.dropout,
-                module_name=self.__class__.__name__,
-                dropout_2d=cfg.dropout_2d,
-            )
+            FairseqDropout(cfg.dropout, module_name=self.__class__.__name__)
             if not dropout_module
             else dropout_module
         )
@@ -154,12 +150,7 @@ class TransformerEncoderLayerBase(nn.Module):
         self.self_attn = self.build_self_attention(self.embed_dim, cfg)
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=self.__class__.__name__, dropout_2d=cfg.dropout_2d
-        )
-        self.moe_dropout_module = FairseqDropout(
-            cfg.moe_dropout or cfg.dropout,
-            module_name=self.__class__.__name__,
-            dropout_2d=cfg.dropout_2d,
+            cfg.dropout, module_name=self.__class__.__name__
         )
         self.normalize_before = cfg.encoder_normalize_before
         self.is_moe_layer = is_moe_layer
@@ -175,7 +166,7 @@ class TransformerEncoderLayerBase(nn.Module):
         # (shared FFN with expert FFN dimension) that tries
         # to replicate FLOPs used by an expert MoE layer with perfectly balanced load
         build_moe = self.is_moe_layer and cfg.alternate_ffn_embed_dim == 0
-        if not build_moe or cfg.moe_clsr:
+        if not build_moe or cfg.moe_cmr:
             self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
             activation_dropout_p = cfg.activation_dropout
             if activation_dropout_p == 0:
@@ -198,7 +189,7 @@ class TransformerEncoderLayerBase(nn.Module):
             )
         if build_moe:
             lang_idx = None
-            if cfg.clsr_log_lang_gates:
+            if cfg.cmr_log_lang_gates:
                 lang_idx = getattr(cfg, "lang_idx", None)
                 assert lang_idx is not None, cfg
             if cfg.moe_top1_expert:
@@ -207,8 +198,6 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
-                    moe_gate_drop=cfg.moe_gate_drop,
-                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                 )
             else:
@@ -220,24 +209,19 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
-                    cfg.moe_gate_drop,
-                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=cfg.init_model_on_gpu,
                 )
-            experts = make_experts(
-                cfg, self.embed_dim, ffn_dim, self.moe_dropout_module
-            )
+            experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
             self.moe_layer = MOELayer(
                 gate,
                 experts,
                 cfg,
                 max_positions=cfg.max_source_positions,
-                tok_dropout=cfg.moe_tok_dropout,
-                moe_only_dropout=cfg.moe_only_dropout,
+                tok_dropout=cfg.moe_eom,
             )
-            if cfg.moe_clsr:
-                self.clsr_layer = CLSRLayer(
+            if cfg.moe_cmr:
+                self.cmr_layer = CMRLayer(
                     self.moe_layer,
                     lambda x: _ffn(
                         x,
@@ -249,7 +233,7 @@ class TransformerEncoderLayerBase(nn.Module):
                         ffn_ln=self.ffn_layernorm,
                     )[0],
                     self.embed_dim,
-                    cfg.clsr_gate_drop,
+                    cfg.cmr_gate_drop,
                     lang_idx=lang_idx,
                 )
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
@@ -422,8 +406,8 @@ class TransformerEncoderLayerBase(nn.Module):
                 if tokens is not None and self.prefix_token_positions is not None
                 else None
             )
-            if self.cfg.moe_clsr:
-                moe_module = self.clsr_layer
+            if self.cfg.moe_cmr:
+                moe_module = self.cmr_layer
             else:
                 moe_module = self.moe_layer
             if self.cfg.use_moe_pad_mask:
@@ -496,12 +480,7 @@ class TransformerDecoderLayerBase(nn.Module):
             load_megatron_fused_kernel()
 
         self.dropout_module = FairseqDropout(
-            cfg.dropout, module_name=self.__class__.__name__, dropout_2d=cfg.dropout_2d
-        )
-        self.moe_dropout_module = FairseqDropout(
-            cfg.moe_dropout or cfg.dropout,
-            module_name=self.__class__.__name__,
-            dropout_2d=cfg.dropout_2d,
+            cfg.dropout, module_name=self.__class__.__name__
         )
         self.quant_noise = cfg.quant_noise_pq
         self.quant_noise_block_size = cfg.quant_noise_pq_block_size
@@ -565,7 +544,7 @@ class TransformerDecoderLayerBase(nn.Module):
 
         self.alpha2 = None
         build_moe = self.is_moe_layer and cfg.alternate_decoder_ffn_embed_dim == 0
-        if not build_moe or cfg.moe_clsr:
+        if not build_moe or cfg.moe_cmr:
             self.activation_fn = utils.get_activation_fn(
                 activation=str(cfg.activation_fn)
                 if cfg.activation_fn is not None
@@ -611,7 +590,7 @@ class TransformerDecoderLayerBase(nn.Module):
             )
         if build_moe:
             lang_idx = None
-            if cfg.clsr_log_lang_gates:
+            if cfg.cmr_log_lang_gates:
                 lang_idx = getattr(cfg, "lang_idx")
                 assert lang_idx is not None, cfg
             if cfg.moe_top1_expert:
@@ -620,8 +599,6 @@ class TransformerDecoderLayerBase(nn.Module):
                     cfg.moe_expert_count,
                     use_fp32=cfg.moe_gating_use_fp32,
                     moe_eval_capacity_token_fraction=cfg.moe_eval_capacity_token_fraction,
-                    moe_gate_drop=cfg.moe_gate_drop,
-                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=init_model_on_gpu,
                 )
@@ -634,24 +611,19 @@ class TransformerDecoderLayerBase(nn.Module):
                     cfg.moe_normalize_gate_prob_before_dropping,
                     cfg.moe_eval_capacity_token_fraction,
                     cfg.moe_batch_prioritized_routing,
-                    moe_gate_drop=cfg.moe_gate_drop,
-                    moe_gate_drop2=cfg.moe_gate_drop2,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=init_model_on_gpu,
                 )
-            experts = make_experts(
-                cfg, self.embed_dim, ffn_dim, self.moe_dropout_module
-            )
+            experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
             self.moe_layer = MOELayer(
                 gate,
                 experts,
                 cfg,
                 max_positions=cfg.max_target_positions,
-                tok_dropout=cfg.moe_tok_dropout,
-                moe_only_dropout=cfg.moe_only_dropout,
+                tok_dropout=cfg.moe_eom,
             )
-            if cfg.moe_clsr:
-                self.clsr_layer = CLSRLayer(
+            if cfg.moe_cmr:
+                self.cmr_layer = CMRLayer(
                     self.moe_layer,
                     lambda x: _ffn(
                         x,
@@ -663,7 +635,7 @@ class TransformerDecoderLayerBase(nn.Module):
                         ffn_ln=self.ffn_layernorm,
                     )[0],
                     self.embed_dim,
-                    cfg.clsr_gate_drop,
+                    cfg.cmr_gate_drop,
                     lang_idx=lang_idx,
                 )
 
@@ -888,8 +860,8 @@ class TransformerDecoderLayerBase(nn.Module):
                 if tokens is not None and self.prefix_token_positions is not None
                 else None
             )
-            if self.cfg.moe_clsr:
-                moe_module = self.clsr_layer
+            if self.cfg.moe_cmr:
+                moe_module = self.cmr_layer
             else:
                 moe_module = self.moe_layer
             if self.cfg.use_moe_pad_mask:

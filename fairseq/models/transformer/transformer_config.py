@@ -103,19 +103,7 @@ class TransformerConfig(FairseqDataclass):
             "alias": "--relu-dropout",
         },
     )
-    moe_dropout: Optional[float] = field(
-        default=None, metadata={"help": "moe expert dropout probability"}
-    )
-    moe_tok_dropout: float = field(
-        default=0.0, metadata={"help": "MoE token-level dropout"}
-    )
-    moe_only_dropout: float = field(
-        default=0.0, metadata={"help": "extra unit-level dropout, MoE layer only"}
-    )
-    dropout_2d: float = field(default=0.0, metadata={"help": "2d dropout"})
-    emb_dropout_2d: float = field(
-        default=0.0, metadata={"help": "embedding 2d dropout"}
-    )
+    moe_eom: float = field(default=0.0, metadata={"help": "MoE token-level dropout"})
     adaptive_input: bool = False
     encoder: EncDecBaseConfig = EncDecBaseConfig()
     # TODO should really be in the encoder config
@@ -267,18 +255,6 @@ class TransformerConfig(FairseqDataclass):
             "help": "whether to normalize gate probs before or after dropping experts for capacity and randomization"
         },
     )
-    moe_gate_drop: float = field(
-        default=0.0,
-        metadata={"help": "Dropout probability for MOE gating"},
-    )
-    moe_gate_drop2: float = field(
-        default=0.0,
-        metadata={"help": "Dropout probability for MOE gating, option 2"},
-    )
-    moe_layerdrop_only: bool = field(
-        default=False,
-        metadata={"help": "Only drop MoE layers in layerdrop"},
-    )
     moe_expert_ffn_dim: Optional[int] = field(
         default=None, metadata={"help": "MoE expert FFN dimension"}
     )
@@ -325,17 +301,17 @@ class TransformerConfig(FairseqDataclass):
             "help": "Pass source or masked previous output tokens to the transformer layer."
         },
     )
-    moe_clsr: Optional[bool] = field(
-        default=False, metadata={"help": "If true enables CLSR gating"}
+    moe_cmr: Optional[bool] = field(
+        default=False, metadata={"help": "If true enables CMR gating"}
     )
-    clsr_log_lang_gates: Optional[bool] = field(
+    cmr_log_lang_gates: Optional[bool] = field(
         default=False,
         metadata={
-            "help": "whether to log per-lang fraction of tokens routed to MOE vs. CLSR"
+            "help": "whether to log per-lang fraction of tokens routed to MOE vs. CMR"
         },
     )
-    clsr_gate_drop: Optional[float] = field(
-        default=0.0, metadata={"help": "CLSR gate dropout rate"}
+    cmr_gate_drop: Optional[float] = field(
+        default=0.0, metadata={"help": "CMR gate dropout rate"}
     )
 
     # NormFormer

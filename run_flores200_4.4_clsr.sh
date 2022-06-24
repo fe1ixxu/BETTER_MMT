@@ -1,4 +1,4 @@
-# bash run_sweep $drop $moe_tok_drp
+# bash run_sweep $drop $moe_eom
 
 fairseq="/home/annaysun/rsc/workspace/fairseq-py2"
 cd $fairseq
@@ -12,5 +12,5 @@ python examples/nllb/modeling/train/train_script.py \
     cfg.dataset.lang_pairs_file=examples/nllb/modeling/scripts/flores200/cl1_lang_pairs.txt \
     cfg.dropout=${drop} \
     cfg.model_type.expert_count=128 \
-    cfg.model_type.moe_param=" --moe --moe-freq 2 --moe-clsr --clsr-gt-drp $2 "
+    cfg.model_type.moe_param=" --moe --moe-freq 2 --moe-cmr --cmr-gate-drp $2 "
 #-c job

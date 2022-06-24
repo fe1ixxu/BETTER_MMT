@@ -53,9 +53,7 @@ class TransformerEncoderBase(FairseqEncoder):
         self.register_buffer("version", torch.Tensor([3]))
 
         self.dropout_module = FairseqDropout(
-            cfg.dropout,
-            module_name=module_name_fordropout(self.__class__.__name__),
-            dropout_2d=cfg.emb_dropout_2d,
+            cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
         )
         self.encoder_layerdrop = cfg.encoder.layerdrop
         self.return_fc = return_fc
@@ -92,10 +90,10 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.quant_noise = None
 
-        # if self.encoder_layerdrop > 0.0:
-        #     self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
-        # else:
-        self.layers = nn.ModuleList([])
+        if self.encoder_layerdrop > 0.0:
+            self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
+        else:
+            self.layers = nn.ModuleList([])
         moe_freq = max(cfg.encoder_moe_freq, cfg.moe_freq)
         for i in range(cfg.encoder_layers):
             is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
@@ -240,11 +238,10 @@ class TransformerEncoderBase(FairseqEncoder):
             results["encoder_states"].append(x)
 
         # encoder layers
-        loss_keys = ["moe_gate_loss", "clsr_gate_loss_num", "clsr_gate_loss_denom"]
+        loss_keys = ["moe_gate_loss", "cmr_gate_loss_num", "cmr_gate_loss_denom"]
         for key in loss_keys:
             results[key] = []
-        dropout_probs = torch.empty(len(self.layers)).uniform_()
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             passed_src_tokens = (
                 src_tokens if self.cfg.pass_tokens_transformer_layer else None
             )
@@ -254,24 +251,10 @@ class TransformerEncoderBase(FairseqEncoder):
                 tokens=passed_src_tokens,
             )
             if isinstance(lr, tuple) and len(lr) == 2:
-                tmp_x, fc_result = lr
+                x, fc_result = lr
             else:
-                tmp_x = lr
+                x = lr
                 fc_result = None
-            moe_layerdrop = (
-                getattr(layer, "is_moe_layer", False) or not self.cfg.moe_layerdrop_only
-            )
-            if (
-                self.training
-                and (dropout_probs[i] < self.encoder_layerdrop)
-                and moe_layerdrop
-            ):
-                x = x + tmp_x * 0
-                if l_aux_i is not None:
-                    for k, v in l_aux_i.items():
-                        l_aux_i[k] = v * 0
-            else:
-                x = tmp_x
             if return_all_hiddens and not torch.jit.is_scripting():
                 results["encoder_states"].append(x)
                 results["fc_results"].append(fc_result)

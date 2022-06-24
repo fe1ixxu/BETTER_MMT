@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 
-class CLSRGate(torch.nn.Module):
+class CMRGate(torch.nn.Module):
     def __init__(self, model_dim: int, p: float = 0.0):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, 1)
@@ -24,7 +24,7 @@ class CLSRGate(torch.nn.Module):
         return gates
 
 
-class CLSRLayer(torch.nn.Module):
+class CMRLayer(torch.nn.Module):
     def __init__(
         self,
         moe_layer: torch.nn.Module,
@@ -36,7 +36,7 @@ class CLSRLayer(torch.nn.Module):
         super().__init__()
         self.moe_layer = moe_layer
         self.ffn_fn = ffn_fn
-        self.gate = CLSRGate(model_dim, p)
+        self.gate = CMRGate(model_dim, p)
         if lang_idx is not None:
             self.register_buffer("lang_idx", lang_idx)
         else:
@@ -64,10 +64,10 @@ class CLSRLayer(torch.nn.Module):
         used_budget = (gates * (~input_padding_mask)).sum()
         total_budget = (~input_padding_mask).sum()
 
-        l_aux["clsr_gate_loss_num"] = used_budget
-        l_aux["clsr_gate_loss_denom"] = total_budget
+        l_aux["cmr_gate_loss_num"] = used_budget
+        l_aux["cmr_gate_loss_denom"] = total_budget
 
-        self.moe_layer.metadata["clsr_lang_gates"] = 0
+        self.moe_layer.metadata["cmr_lang_gates"] = 0
         if prefix_tokens is not None and self.lang_idx is not None:
             num_langs = self.lang_idx.shape[0]
             # map lang token indices to lang_idx
@@ -83,7 +83,7 @@ class CLSRLayer(torch.nn.Module):
             out = F.normalize(out, p=1, dim=1, eps=1e-5)
 
             # per-lang, (soft) fraction of tokens routed to MOE layers
-            self.moe_layer.metadata["clsr_lang_gates"] = out.mm(
+            self.moe_layer.metadata["cmr_lang_gates"] = out.mm(
                 gates.mean(dim=1, keepdim=True)
             ).detach()
         return x_out, l_aux
