@@ -103,7 +103,7 @@ class TransformerConfig(FairseqDataclass):
             "alias": "--relu-dropout",
         },
     )
-    moe_eom: float = field(default=0.0, metadata={"help": "MoE token-level dropout"})
+    moe_eom: float = field(default=0.0, metadata={"help": "MoE expert output masking"})
     adaptive_input: bool = False
     encoder: EncDecBaseConfig = EncDecBaseConfig()
     # TODO should really be in the encoder config

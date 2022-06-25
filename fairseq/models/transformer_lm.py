@@ -44,7 +44,7 @@ class TransformerLanguageModelConfig(FairseqDataclass):
         default=0.0, metadata={"help": "dropout probability after activation in FFN."}
     )
 
-    moe_eom: float = field(default=0.0, metadata={"help": "MoE token-level dropout"})
+    moe_eom: float = field(default=0.0, metadata={"help": "MoE expert output masking"})
     relu_dropout: float = field(
         default=0.0, metadata={"help": "dropout probability after activation in FFN."}
     )

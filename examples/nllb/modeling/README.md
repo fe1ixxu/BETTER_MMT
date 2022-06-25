@@ -1,63 +1,51 @@
-# NLLB Modeling
+# NLLB-200 Training Scripts
 
-This subdirectory contains code associated with preprocessing training data, training MT models, generation and computing evaluation metrics for MT models
-Installation:
+These are scripts for training the NLLB-200 model and other variants. 
 
-Since this branch uses Hydra 1.1, we'll need to create a new Python environment
-```
-module load anaconda3/5.0.1
-module load cudnn/v8.0.3.33-cuda.11.0
-module load cuda/11.0
-module load openmpi/4.1.0/cuda.11.0-gcc.9.3.0
+## Final NLLB-200 model
+All of the scripts have `-c job` to print the configuration before running. Uncomment this to launch training. 
 
-# one-time setup:
-FAIRSEQ_ENV=/private/home/myleott/.conda/envs/fairseq-20210318-py38
-conda create --clone $FAIRSEQ_ENV -n fairseq-20210318_nllb
+First, set the output directory for checkpoints and training logs:
 
-# to activate the environment:
-source activate fairseq-20210318_nllb
-```
-Make sure you run all your scripts inside the fairseq-20210318_nllb environment.
-Install fairseq and hydra 1.1 in the envinroment:
-```
-cd ~/fairseq-py
-pip install --editable .
-pip install hydra-core --upgrade --pre
-```
+`export OUTPUT_DIR=...`
 
-Now, try running the demo script:
+NLLB-200 with Phase-Based Curriculum Learning:
 
-data preparation
-```
-python examples/nllb/modeling/prepare_data.py
-```
+`bash examples/nllb/modeling/train/scripts/run_flores200_4.4_final.sh $OUTPUT_DIR`
 
-training pipeline
-```
-python examples/nllb/modeling/train.py \
-    --dry-run
-```
+| update step | max_updates | lang_pairs_file | restore_file | reset_dataloader |
+| - | - | - | - | - |
+| 0 | 170000 | final_lang_pairs_cl3.txt | ~ | false |
+| 170000   | 230000 | final_lang_pairs_cl2.txt | `$OUTPUT_DIR/checkpoint_17_170000.pt` | false |
+| 230000   | 270000 | final_lang_pairs_cl1.txt | `$OUTPUT_DIR/checkpoint_22_230000.pt` | false |
+| 270000   | 300000 | lang_pairs.txt | `$OUTPUT_DIR/checkpoint_25_270000.pt` | true |
 
-***
-Syntax of training config YAML file:
+## Other variants
 
-single value
+### 1. Expert Output Masking
+Without Curriculum Learning, overall_drop=0.3, expert_output_mask=0.2:
 
-```
-max_update: 10
-weight_decay: 0.001
-adam_betas: "'(0.1)'"       # enclose by a single quote plus a double quote
-langs: "'cs,de,en'"
-lr: [0.01]
-```
+`bash examples/nllb/modeling/train/scripts/run_flores200_4.4_eom_sweep.sh $OUTPUT_DIR 0.3 0.2`
 
-sweeping values
-(comma separated values in strings)
+With Naive Curriculum Learning, overall_drop=0.3, expert_output_mask=0.2:
 
-```
-max_update: 10,20
-weight_decay: 0.001
-adam_betas: "'(0.9, 0.98)','(0.7, 0.98)'"
-optimizer: adam,adadelta
-lr: '[0.01],[0.1]'          # enclose by single quote
-```
+`bash examples/nllb/modeling/train/scripts/run_flores200_4.4_eom.sh $OUTPUT_DIR 0.3 0.2`
+
+| update step | max_updates | lang_pairs_file | restore_file |
+| - | - | - | - |
+| 0 | 200000 | cl1_lang_pairs.txt | ~ |
+| 200000   | 300000 | lang_pairs.txt | `$OUTPUT_DIR/checkpoint_27_200000.pt` |
+
+### 2. Conditional MoE Routing
+Without Curriculum Learning, overall_drop=0.3, conditional_gate_drop=0.2:
+
+`bash examples/nllb/modeling/train/scripts/run_flores200_4.4_cmr_sweep.sh $OUTPUT_DIR 0.3 0.2`
+
+With Naive Curriculum Learning, overall_drop=0.3, conditional_gate_drop=0.2:
+
+`bash examples/nllb/modeling/train/scripts/run_flores200_4.4_cmr.sh $OUTPUT_DIR 0.3 0.2`
+
+| update step | max_updates | lang_pairs_file | restore_file |
+| - | - | - | - |
+| 0 | 200000 | cl1_lang_pairs.txt | ~ |
+| 200000   | 300000 | lang_pairs.txt | `$OUTPUT_DIR/checkpoint_27_200000.pt` |
