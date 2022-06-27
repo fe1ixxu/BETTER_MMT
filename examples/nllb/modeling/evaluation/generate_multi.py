@@ -218,7 +218,7 @@ class GenerateMultiModule(NLLBModule):
                             if "BLEU" in line:
                                 has_completed_before = True
                 if has_completed_before:
-                    return
+                    continue
                 checkpoint_name = job_config.checkpoint
                 if self.config.model_type == "dense":
                     checkpoint_name += "-shard0"
