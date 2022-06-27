@@ -94,6 +94,7 @@ class MOELayer(Base):
         max_positions: Optional[int] = None,
         init_model_on_gpu: Optional[bool] = False,
         tok_dropout: float = 0.0,
+        moe_local_drop: float = 0.0,
     ) -> None:
         super().__init__()
         self.gate = gate
@@ -126,6 +127,7 @@ class MOELayer(Base):
         )
         self.max_positions = max_positions
         self.tok_dropout = tok_dropout
+        self.moe_local_drop = moe_local_drop
 
     def forward(
         self, *input: Tensor, input_padding_mask=None, prefix_tokens=None, **kwargs: Any
@@ -289,7 +291,16 @@ class MOELayer(Base):
             dispatched_input = torch.mm(
                 dispatch_mask.view(E * C, S), reshaped_input
             )  # -> (E*C),M
-        if self.all2all_size > 1:
+        use_all_to_all = True
+        if self.moe_local_drop > 0.0 and self.training:
+            if dist.get_rank() == 0:
+                use_all_to_all = (
+                    dispatched_input.new_empty([]).uniform_() > self.moe_local_drop
+                )
+            else:
+                use_all_to_all = dispatched_input.new_zeros([], dtype=torch.bool)
+            distributed_utils.broadcast(use_all_to_all, src=0, group=self.all2all_group)
+        if self.all2all_size > 1 and use_all_to_all:
             dispatched_input = self.all_to_all_wrapper(dispatched_input)
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(
@@ -300,7 +311,7 @@ class MOELayer(Base):
         for chunk, expert in zip(chunks, self.experts):
             expert_outputs += [expert(chunk)]
         expert_output = torch.cat(expert_outputs, dim=1)
-        if self.all2all_size > 1:
+        if self.all2all_size > 1 and use_all_to_all:
             expert_output = self.all_to_all_wrapper(expert_output)
         if self.tok_dropout > 0.0:
             # TODO: replace w Dropout2d

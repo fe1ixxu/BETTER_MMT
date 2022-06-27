@@ -255,6 +255,10 @@ class TransformerConfig(FairseqDataclass):
             "help": "whether to normalize gate probs before or after dropping experts for capacity and randomization"
         },
     )
+    moe_local_drop: float = field(
+        default=0.0,
+        metadata={"help": "Probability of gating drop out to local experts"},
+    )
     moe_expert_ffn_dim: Optional[int] = field(
         default=None, metadata={"help": "MoE expert FFN dimension"}
     )

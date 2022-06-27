@@ -359,6 +359,7 @@ def add_extra_options_func(parser):
     parser.add_argument("--cmr-wt", type=float, default=0.1)
     parser.add_argument("--cmr-p", type=float, default=0.8)
     parser.add_argument("--cmr-gate-drop", type=float, default=0.0)
+    parser.add_argument("--moe-local-drop", type=float, default=0.0)
 
 
 def get_grid(args):
@@ -580,6 +581,14 @@ def get_grid(args):
                         save_dir_key=lambda val: f"c_drp{val}",
                     )
                 )
+        if args.moe_local_drop > 0:
+            grids.append(
+                hyperparam(
+                    "--moe-local-drop",
+                    [args.moe_local_drop],
+                    save_dir_key=lambda val: f"mldrp{val}",
+                )
+            )
         if args.synchronize_checkpoints_before_copy:
             grids.append(hyperparam("--synchronize-checkpoints-before-copy"))
         if args.symlink_best_and_last_checkpoints:

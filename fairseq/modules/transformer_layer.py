@@ -219,6 +219,7 @@ class TransformerEncoderLayerBase(nn.Module):
                 cfg,
                 max_positions=cfg.max_source_positions,
                 tok_dropout=cfg.moe_eom,
+                moe_local_drop=cfg.moe_local_drop,
             )
             if cfg.moe_cmr:
                 self.cmr_layer = CMRLayer(
@@ -621,6 +622,7 @@ class TransformerDecoderLayerBase(nn.Module):
                 cfg,
                 max_positions=cfg.max_target_positions,
                 tok_dropout=cfg.moe_eom,
+                moe_local_drop=cfg.moe_local_drop,
             )
             if cfg.moe_cmr:
                 self.cmr_layer = CMRLayer(
