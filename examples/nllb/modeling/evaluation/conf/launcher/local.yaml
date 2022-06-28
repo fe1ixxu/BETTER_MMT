@@ -3,5 +3,5 @@
 defaults:
   - cache: no_cache
   - lang: luo
-  
-_target_: examples.nllb.nllb_lib.LocalLauncher
+
+_target_: stopes.core.Launcher

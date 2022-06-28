@@ -14,8 +14,7 @@ from re import M
 
 import hydra
 from omegaconf import MISSING, DictConfig, OmegaConf
-
-from examples.nllb.nllb_lib.nllb_module import DistributedRequirements, NLLBModule
+from stopes.core import StopesModule
 
 
 @dataclass
@@ -101,7 +100,7 @@ class MainConfig:
     cfg: TrainConfig = TrainConfig()
 
 
-class TrainModule(NLLBModule):
+class TrainModule(StopesModule):
     def __init__(self, config):
         super().__init__(config)
 

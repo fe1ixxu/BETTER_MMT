@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from random import randint
 
 import hydra
+import stopes.core
 from omegaconf import MISSING, DictConfig
-
-from examples.nllb.nllb_lib.nllb_module import DistributedRequirements, NLLBModule
+from stopes.core.launcher import NoCache
 
 
 @dataclass
@@ -78,7 +78,7 @@ class JobConfig:
     datalabel: str = ""
 
 
-class GenerateMultiModule(NLLBModule):
+class GenerateMultiModule(stopes.core.StopesModule):
     def __init__(self, config):
         super().__init__(config)
         assert os.path.isdir(
@@ -134,7 +134,7 @@ class GenerateMultiModule(NLLBModule):
         if self.config.model_type == "moe":
             gpus = 8
             num_nodes = 2
-            req = DistributedRequirements(
+            req = stopes.core.DistributedRequirements(
                 tasks_per_node=1,
                 nodes=num_nodes,
                 gpus_per_node=gpus,
@@ -145,7 +145,7 @@ class GenerateMultiModule(NLLBModule):
             )
             return req
         else:
-            return DistributedRequirements(
+            return stopes.core.DistributedRequirements(
                 tasks_per_node=1,
                 nodes=1,
                 gpus_per_node=8,

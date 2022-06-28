@@ -1,1 +1,1 @@
-_target_: examples.nllb.nllb_lib.NoCache
+_target_: stopes.core.launcher.NoCache
