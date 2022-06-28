@@ -152,6 +152,8 @@ class TransformerEncoderLayerBase(nn.Module):
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
         )
+        # completetly drop the expert output of some tokens and rely on the residual connection
+        self.moe_fom = cfg.moe_fom
         self.normalize_before = cfg.encoder_normalize_before
         self.is_moe_layer = is_moe_layer
         self.prefix_token_positions = (
@@ -419,6 +421,17 @@ class TransformerEncoderLayerBase(nn.Module):
                 )
             else:
                 x, l_aux = moe_module(x, prefix_tokens=prefix_tokens)
+
+            if self.moe_fom:
+                if self.training:
+                    mask = (
+                        torch.empty(x.shape[:-1], device=x.device).uniform_()
+                        > self.moe_fom
+                    )
+                    x = mask.unsqueeze(-1) * x
+                else:
+                    x = (1 - self.moe_fom) * x
+
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -483,6 +496,9 @@ class TransformerDecoderLayerBase(nn.Module):
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
         )
+        # completetly drop the expert output of some tokens and rely on the residual connection
+        self.moe_fom = cfg.moe_fom
+
         self.quant_noise = cfg.quant_noise_pq
         self.quant_noise_block_size = cfg.quant_noise_pq_block_size
 
@@ -874,6 +890,17 @@ class TransformerDecoderLayerBase(nn.Module):
                 )
             else:
                 x, l_aux = moe_module(x, prefix_tokens=prefix_tokens)
+
+            if self.moe_fom:
+                if self.training:
+                    mask = (
+                        torch.empty(x.shape[:-1], device=x.device).uniform_()
+                        > self.moe_fom
+                    )
+                    x = mask.unsqueeze(-1) * x
+                else:
+                    x = (1 - self.moe_fom) * x
+
             x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         x = self.residual_connection(x, residual, alpha=self.alpha2)
         if not self.normalize_before:
