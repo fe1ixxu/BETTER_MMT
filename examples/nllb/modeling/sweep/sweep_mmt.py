@@ -765,6 +765,45 @@ def added_adapter_transformer() -> List[hyperparam]:
     ]
 
 
+@register_grid("transformer_6_6")
+def get_transformer_6_6_grid():
+    return [
+        hyperparam("--arch", "transformer", save_dir_key=lambda val: val),
+        hyperparam(
+            "--share-all-embeddings",
+            True,
+            binary_flag=True,
+            save_dir_key=lambda val: "shem",
+        ),
+        hyperparam("--encoder-layers", 6, save_dir_key=lambda val: f"els{val}"),
+        hyperparam("--decoder-layers", 6, save_dir_key=lambda val: f"dls{val}"),
+        # this is a multiplier of embed dim
+        hyperparam(
+            "--encoder-ffn-embed-dim",
+            4 * 1024,
+            save_dir_key=lambda val: f"encffnx{val}",
+        ),
+        hyperparam(
+            "--decoder-ffn-embed-dim",
+            4 * 1024,
+            save_dir_key=lambda val: f"decffnx{val}",
+        ),
+        hyperparam("--encoder-embed-dim", 512, save_dir_key=lambda val: f"E{val}"),
+        hyperparam("--decoder-embed-dim", 512),
+        hyperparam("--encoder-attention-heads", 8, save_dir_key=lambda val: f"H{val}"),
+        hyperparam("--decoder-attention-heads", 8),
+        hyperparam(
+            "--encoder-normalize-before",
+            True,
+            binary_flag=True,
+            save_dir_key=lambda _: "NBF",
+        ),
+        hyperparam("--decoder-normalize-before", True, binary_flag=True),
+        hyperparam("--attention-dropout", 0.2, save_dir_key=lambda val: f"adrp{val}"),
+        hyperparam("--relu-dropout", 0.2, save_dir_key=lambda val: f"rdrp{val}"),
+    ]
+
+
 @register_grid("transformer_12_12_wide")
 def transformer_12_12_wide() -> List[hyperparam]:
     def key(prefix: str):
