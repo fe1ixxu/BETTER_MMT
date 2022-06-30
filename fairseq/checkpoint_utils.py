@@ -468,12 +468,12 @@ def load_checkpoint_to_cpu(
         # omegaconf version that supports object flags, or when we migrate all existing models
         from omegaconf import _utils
 
-        old_primitive = _utils.is_primitive_type
-        _utils.is_primitive_type = lambda _: True
+        old_primitive = _utils.is_primitive_type_annotation
+        _utils.is_primitive_type_annotation = lambda _: True
 
         state["cfg"] = OmegaConf.create(state["cfg"])
 
-        _utils.is_primitive_type = old_primitive
+        _utils.is_primitive_type_annotation = old_primitive
         OmegaConf.set_struct(state["cfg"], True)
 
         if arg_overrides is not None:

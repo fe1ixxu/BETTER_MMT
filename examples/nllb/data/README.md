@@ -1,15 +1,13 @@
-# Data
+# No Language Left Behind : Data
 
-## Primary Datasets
+### Primary Datasets
 
-### Public data
+#### Public data
 
-The script `download_parallel_corpora.py` is provided for convenience
-to automate download of many publicly available sources of MT data
-which were used to train NLLB models. You should provide a parent
-directory into which to save the data. Usage is as follows:
+The script [`download_parallel_corpora.py`](download_parallel_corpora.py) is provided for convenience to automate download of many publicly available sources of MT data
+which were used to train NLLB models. You should provide a parent directory into which to save the data. Usage is as follows:
 
-``` bash
+```bash
 python download_parallel_corpora.py --directory $DOWNLOAD_DIRECTORY
 ```
 
@@ -29,13 +27,25 @@ We hope that it may soon be made available again.
 
 ### NLLB-Seed Data
 
-NLLB-Seed datasets can be downloaded from [Flores-200 repo]().
+NLLB-Seed datasets are included along with above Public datasets to create our Primary dataset. NLLB-Seed data can be downloaded from [here](https://github.com/facebookresearch/flores/nllb_seed).
 
 
-## Mined Data
+### Mined Datasets
 
-Mined metadata is available in [mining metadata](). [TODO].
+LASER3 encoders and mined bitext metadata are open sourced in [LASER](https://github.com/facebookresearch/LASER) repository. Global mining pipeline and monolingual data filtering pipelines are released and available in our [stopes](https://github.com/facebookresearch/stopes) repository.
 
-## Backtranslated Data
+### Backtranslated Datasets
 
-Backtranslation data for NMT models can be generated using the script. [TODO].
+A helper script to perform backtranslation can be found in [nllb/modeling/scripts/backtranslation/generate_backtranslations.sh](../modeling/scripts/backtranslation/generate_backtranslations.sh). It will take a corpus that’s been binarized using `stopes` [`prepare_data` pipeline](https://github.com/facebookresearch/stopes/tree/main/stopes/pipelines/prepare_data) and backtranslate all its shards. Please check the [backtranslation README](../modeling/scripts/backtranslation/README.md) file for further guidance on how to run this helper script.
+
+Data that has been backtranslated will then need to be extracted into a parallel corpus. The script [`examples/nllb/modeling/scripts/backtranslation/extract_fairseq_bt.py`](../modeling/scripts/backtranslation/extract_fairseq_bt.py) automates this task. Further information can be found in the README above.
+
+Once backtranslated data has been extracted, it can be treated as any other bitext corpus. Please follow the instructions for data filtering and preparation below.
+
+
+## Preparing the data
+
+Data preparation is fully managed by the [`stopes`](https://github.com/facebookresearch/stopes) pipelines. Specifically:
+
+1. Data filtering is performed using `stopes` [`filtering` pipeline](https://github.com/facebookresearch/stopes/tree/main/stopes/pipelines/filtering). Please check the corresponding README file and example configuration for more details.
+2. Once filtered, data can then be preprocessed/binarized with `stopes` [`prepare_data` pipeline](https://github.com/facebookresearch/stopes/tree/main/stopes/pipelines/prepare_data).

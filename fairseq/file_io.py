@@ -16,7 +16,6 @@ import torch
 
 logger = logging.getLogger(__file__)
 
-from .fb_pathhandlers import S3PathHandler
 
 try:
     from iopath.common.file_io import g_pathmgr as IOPathManager

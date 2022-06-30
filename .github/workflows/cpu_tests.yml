@@ -44,7 +44,7 @@ jobs:
       run: |
         conda activate fairseq
         git submodule update --init --recursive
-        pip install statsmodels==0.12.2 more_itertools submitit boto3 editdistance iopath ipdb ipython pyarrow pytest sacremoses sentencepiece subword-nmt transformers sklearn scipy fairscale==0.4.3 Jinja2==2.11.3
+        pip install torch==1.10.1 torchvision==0.11.2 torchaudio==0.10.1 statsmodels==0.12.2 more_itertools submitit boto3 editdistance iopath ipdb ipython pyarrow pytest sacremoses sentencepiece subword-nmt transformers sklearn scipy fairscale Jinja2==2.11.3
 
     - name: Install Repository
       shell: bash -l {0}
