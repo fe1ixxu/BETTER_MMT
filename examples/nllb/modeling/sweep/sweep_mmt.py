@@ -342,6 +342,11 @@ def add_extra_options_func(parser):
         help="restore checkpoint file",
     )
     parser.add_argument(
+        "--reset-all",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--no-save",
         default=False,
         action="store_true",
@@ -354,12 +359,14 @@ def add_extra_options_func(parser):
         help="log updates interval",
     )
 
+    parser.add_argument("--moe-gate-loss-wt", type=float, default=0.01)
     parser.add_argument("--moe-eom", type=float, default=0.0)
     parser.add_argument("--moe-cmr", action="store_true", default=0.0)
     parser.add_argument("--cmr-wt", type=float, default=0.1)
     parser.add_argument("--cmr-p", type=float, default=0.8)
     parser.add_argument("--cmr-gate-drop", type=float, default=0.0)
     parser.add_argument("--moe-local-drop", type=float, default=0.0)
+    parser.add_argument("--replication-count", type=int, default=1)
 
 
 def get_grid(args):
@@ -502,6 +509,15 @@ def get_grid(args):
         grids.append(hyperparam("--finetune-dict-specs", args.finetune_dict_specs))
     if args.restore_file is not None:
         grids.append(hyperparam("--restore-file", args.restore_file))
+    if args.reset_all:
+        grids.extend(
+            [
+                hyperparam("--reset-dataloader"),
+                hyperparam("--reset-optimizer"),
+                hyperparam("--reset-lr-scheduler"),
+                hyperparam("--reset-meters"),
+            ]
+        )
     if args.no_save:
         grids.append(hyperparam("--no-save", True, binary_flag=True))
     if args.reset_dataloader:
@@ -514,7 +530,9 @@ def get_grid(args):
         grids.extend(
             [
                 hyperparam(
-                    "--moe-gate-loss-wt", [0.01], save_dir_key=lambda val: f"moe_w{val}"
+                    "--moe-gate-loss-wt",
+                    [args.moe_gate_loss_wt],
+                    save_dir_key=lambda val: f"moe_w{val}",
                 ),
                 hyperparam("--moe-gate-loss-combine-method", "sum"),
                 hyperparam(
@@ -605,6 +623,7 @@ def get_grid(args):
                 "--ddp-backend", args.ddp_backend, save_dir_key=lambda val: f"{val}"
             )
         )
+    grids.append(hyperparam("--replication-count", [args.replication_count]))
     if args.encoder_langtok:
         grids.append(
             hyperparam(

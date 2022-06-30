@@ -90,9 +90,12 @@ class TrainConfig:
     dae_mask: float = 0.3
     finetune_dict_specs: tp.Optional[str] = None
     restore_file: tp.Optional[str] = None
+    finetune_from_model: tp.Optional[str] = None
     no_save: bool = False
     log_interval: int = 100
     reset_dataloader: bool = False
+    reset_all: bool = False
+    replication_count: int = 1
 
 
 @dataclass
@@ -249,16 +252,19 @@ class TrainModule(StopesModule):
                 --use-local-shard-size \
                 --enable-m2m-validation \
                 --add-data-source-prefix-tags \
+                --replication-count {cfg.replication_count} \
                 {checkpoint_activations_param} \
                 {zero2_param} \
                 {moe_params} \
                 {ssl_params} \
                 {f"--finetune-dict-specs {cfg.finetune_dict_specs} " if cfg.finetune_dict_specs is not None else ""} \
                 {f"--restore-file {cfg.restore_file}" if cfg.restore_file is not None else ""} \
+                {f"--finetune-from-model {cfg.finetune_from_model}" if cfg.finetune_from_model is not None else ""} \
                 {"--no-save" if cfg.no_save else ""} \
                 {f"--log-interval {cfg.log_interval}" if cfg.log_interval is not None else ""} \
                 {f"--eval-lang-pairs {cfg.eval_lang_pairs}" if cfg.eval_lang_pairs is not None else ""} \
-                {"--reset-dataloader" if cfg.reset_dataloader else ""}
+                {"--reset-dataloader" if cfg.reset_dataloader else ""} \
+                {"--reset-all" if cfg.reset_all else ""}
         """
 
         print("RUNNING SWEEP COMMAND:")

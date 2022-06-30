@@ -43,8 +43,11 @@ ssl_task: null
 dae_mask: 0.5
 train_subset: train
 finetune_dict_specs: null
+finetune_from_model: null
 restore_file: null
 no_save: false
 log_interval: 100
 eval_lang_pairs: null
 reset_dataloader: false
+replication_count: 1
+reset_all: false

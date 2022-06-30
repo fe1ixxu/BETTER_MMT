@@ -847,6 +847,10 @@ class CheckpointConfig(FairseqDataclass):
             "argparse_alias": "--s3-dir",
         },
     )
+    replication_count: int = field(
+        default=1,
+        metadata={"help": ("replciation when loading moe expert states")},
+    )
     model_parallel_size: int = II("common.model_parallel_size")
 
 
