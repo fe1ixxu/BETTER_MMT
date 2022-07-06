@@ -5,12 +5,12 @@
 LASER3 encoders are built from LASER encoders following a [teacher-student approach](https://arxiv.org/abs/2205.12654).
 This folder contains the training code for LASER3 encoders.
 
-If you are interested in the training code of LASER encoders (the Teacher), you can refer to the [LASER's training code](examples/laser/README.md). To learn more about LASER, you can refer to the [LASER repository](https://github.com/facebookresearch/LASER/). If you are interested in inference only, you can refer to [this page](https://github.com/facebookresearch/LASER/tree/main/nllb/README.md).
+If you are interested in the training code of LASER encoders (the Teacher), you can refer to the [LASER's training code](/examples/laser/README.md). To learn more about LASER, you can refer to the [LASER repository](https://github.com/facebookresearch/LASER/). If you are interested in inference only, you can refer to [this page](https://github.com/facebookresearch/LASER/tree/main/nllb/README.md).
 
 
 # Training the language specialized encoders
 
-The data preparation is similar to LASER's [training code](examples/laser/README.md).
+The data preparation is similar to LASER's [training code](/examples/laser/README.md).
 
 Binarize your data with fairseq, as described [here](https://fairseq.readthedocs.io/en/latest/getting_started.html#data-pre-processing), by using the argument `--dataset-impl cached`.
 
