@@ -969,11 +969,9 @@ class Trainer(object):
                     )
                     del loss
 
-                if self.get_num_updates() % 100 == 0:
-                    # this might help with Auks, unsure...
-                    if os.path.exists("/checkpoint/nllb/data/dummy.txt"):
-                        f = open("/checkpoint/nllb/data/dummy.txt")
-                        f.close()
+                if self.get_num_updates() % self.cfg.common.log_interval == 0:
+                    dummy_auks_check(self, self.cfg.checkpoint.save_dir)
+
                     gc.collect()
 
                 logging_outputs.append(logging_output)
@@ -1774,3 +1772,16 @@ def _set_module_by_path(module, path, value):
     for name in path[:-1]:
         module = getattr(module, name)
     setattr(module, path[-1], value)
+
+
+def dummy_auks_check(trainer: Trainer, save_dir: str) -> None:
+    # force an Auks credential check during train/validation, rather than
+    # waiting until checkpoint write time to crash
+    dummy_fname = os.path.join(
+        save_dir,
+        f"dummy{trainer.checkpoint_suffix}.tmp",
+    )
+    if trainer.should_save_checkpoint_on_current_rank:
+        with PathManager.open(dummy_fname, "wb") as f:
+            logger.debug(f.name)
+        PathManager.rm(dummy_fname)

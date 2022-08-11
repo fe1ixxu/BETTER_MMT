@@ -41,7 +41,7 @@ from fairseq.distributed import utils as distributed_utils
 from fairseq.file_io import PathManager
 from fairseq.logging import meters, metrics, progress_bar
 from fairseq.model_parallel.megatron_trainer import MegatronTrainer
-from fairseq.trainer import Trainer
+from fairseq.trainer import Trainer, dummy_auks_check
 
 
 def main(cfg: FairseqConfig) -> None:
@@ -532,6 +532,7 @@ def validate(
                 subset, distributed_utils.get_global_rank()
             )
         )
+        dummy_auks_check(trainer, cfg.checkpoint.save_dir)
 
         # Initialize data iterator
         itr = trainer.get_valid_iterator(subset).next_epoch_itr(

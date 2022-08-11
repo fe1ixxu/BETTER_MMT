@@ -1,6 +1,6 @@
 defaults:
   - default
-  - override cluster: azure
+  - override cluster: rsc
   - override dataset: flores200.full.v4.4
   - override model_type: moe
 
