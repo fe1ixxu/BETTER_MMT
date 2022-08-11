@@ -17,12 +17,23 @@ from fairseq.file_io import load_and_pop_last_optimizer_state
 
 try:
     from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
-    from fairscale.utils.testing import DummyProcessGroup
 
     has_FSDP = True
 except ImportError:
     FSDP = torch.nn.Module
     has_FSDP = False
+
+
+class DummyProcessGroup:
+    def __init__(self, rank: int, size: int):
+        self._rank = rank
+        self._size = size
+
+    def rank(self) -> int:
+        return self._rank
+
+    def size(self) -> int:
+        return self._size
 
 
 class FullyShardedDataParallel(FSDP):
