@@ -492,6 +492,12 @@ class MultilingualDatasetManager(object):
             action=FileContentsAction,
         )
         parser.add_argument(
+            "--multilingual-data-pivot-lang",
+            default="eng_Latn",
+            type=str,
+            help="Pivot language in m2m validation",
+        )
+        parser.add_argument(
             "--finetune-dict-specs",
             help='a dictionary of which finetuning dictionary setups to mimic, \
                             e.g. {"mono_dae": "", "mono_lm": ""}',
@@ -837,6 +843,7 @@ class MultilingualDatasetManager(object):
                     )
         else:
             for k in itertools.count():
+                pivot = getattr(self.args, "multilingual_data_pivot_lang", "eng_Latn")
                 split_k = split + (str(k) if k > 0 else "")
 
                 # infer langcode
@@ -853,27 +860,23 @@ class MultilingualDatasetManager(object):
                     and split_k in ["valid", "test"]
                     and (
                         self.split_exists(
-                            split_k, "eng_Latn", src, src, data_path, dataset_impl
+                            split_k, pivot, src, src, data_path, dataset_impl
                         )
                         or self.split_exists(
-                            split_k, src, "eng_Latn", src, data_path, dataset_impl
+                            split_k, src, pivot, src, data_path, dataset_impl
                         )
                     )
                     and (
                         self.split_exists(
-                            split_k, "eng_Latn", tgt, tgt, data_path, dataset_impl
+                            split_k, pivot, tgt, tgt, data_path, dataset_impl
                         )
                         or self.split_exists(
-                            split_k, tgt, "eng_Latn", tgt, data_path, dataset_impl
+                            split_k, tgt, pivot, tgt, data_path, dataset_impl
                         )
                     )
                 ):
-                    src_dir = (
-                        f"{src}-eng_Latn" if src < "eng_Latn" else f"eng_Latn-{src}"
-                    )
-                    tgt_dir = (
-                        f"{tgt}-eng_Latn" if tgt < "eng_Latn" else f"eng_Latn-{tgt}"
-                    )
+                    src_dir = f"{src}-{pivot}" if src < pivot else f"{pivot}-{src}"
+                    tgt_dir = f"{tgt}-{pivot}" if tgt < pivot else f"{pivot}-{tgt}"
                     prefix_src = os.path.join(data_path, f"{split_k}.{src_dir}.")
                     prefix_tgt = os.path.join(data_path, f"{split_k}.{tgt_dir}.")
                 else:
@@ -1587,6 +1590,9 @@ class MultilingualDatasetManager(object):
                     elif f"{tgt}-{tgt}" in shards_dict:
                         num_shards_dict[key] = shards_dict[f"{tgt}-{tgt}"]
                 else:
+                    pivot = getattr(
+                        self.args, "multilingual_data_pivot_lang", "eng_Latn"
+                    )
                     if f"{src}-{tgt}" in shards_dict:
                         num_shards_dict[key] = shards_dict[f"{src}-{tgt}"]
                     elif f"{tgt}-{src}" in shards_dict:
@@ -1596,22 +1602,22 @@ class MultilingualDatasetManager(object):
                         self.enable_m2m_validation
                         and split in ["valid", "test"]
                         and (
-                            f"eng_Latn-{src}" in shards_dict
-                            or f"{src}-eng_Latn" in shards_dict
+                            f"{pivot}-{src}" in shards_dict
+                            or f"{src}-{pivot}" in shards_dict
                         )
                         and (
-                            f"eng_Latn-{tgt}" in shards_dict
-                            or f"{tgt}-eng_Latn" in shards_dict
+                            f"{pivot}-{tgt}" in shards_dict
+                            or f"{tgt}-{pivot}" in shards_dict
                         )
                     ):
-                        if f"eng_Latn-{src}" in shards_dict:
-                            num_shards_dict[key] = shards_dict[f"eng_Latn-{src}"]
-                        elif f"{src}-eng_Latn" in shards_dict:
-                            num_shards_dict[key] = shards_dict[f"{src}-eng_Latn"]
-                        elif f"eng_Latn-{tgt}" in shards_dict:
-                            num_shards_dict[key] = shards_dict[f"eng_Latn-{tgt}"]
-                        elif f"{tgt}-eng_Latn" in shards_dict:
-                            num_shards_dict[key] = shards_dict[f"{tgt}-eng_Latn"]
+                        if f"{pivot}-{src}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{pivot}-{src}"]
+                        elif f"{src}-{pivot}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{src}-{pivot}"]
+                        elif f"{pivot}-{tgt}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{pivot}-{tgt}"]
+                        elif f"{tgt}-{pivot}" in shards_dict:
+                            num_shards_dict[key] = shards_dict[f"{tgt}-{pivot}"]
 
         self._num_shards_dict[split] = num_shards_dict
         logger.info(f"[{split}] num of shards: {num_shards_dict}")

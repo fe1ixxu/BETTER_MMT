@@ -15,6 +15,7 @@ from statistics import median
 from typing import Callable, Dict, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor
 from torch.distributions import Categorical
@@ -25,6 +26,11 @@ gumbel_map: Dict[torch.device, Callable] = {}
 
 # logging
 SAMPLE_FRACTION = 0.2
+
+
+def print_r0(*msg):
+    if dist.get_rank() == 0:
+        print(*msg)
 
 
 def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
@@ -66,6 +72,7 @@ def top2gating(
     moe_eval_capacity_length=None,
     use_tutel=False,
     prefix_tokens=None,
+    analyse=False,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Implements Top2Gating on logits."""
     metadata = {}
@@ -73,6 +80,8 @@ def top2gating(
         orig_dtype = logits.dtype
         logits = logits.float()
     gates = F.softmax(logits, dim=1)
+    if analyse:
+        metadata["soft_gates"] = gates
 
     metadata["entropy_gating"] = entropy(probs=gates).mean().detach()
     # gates has shape of SE
@@ -91,7 +100,9 @@ def top2gating(
 
     # Create a mask for 1st's expert per token
     indices1_s = torch.argmax(gates, dim=1, keepdim=True)
+
     mask1 = one_hot(indices1_s, num_experts)
+
     if second_expert_policy == "sampling":
         # Create a mask for 2nd's expert per token using Gumbel-max trick
         # https://timvieira.github.io/blog/post/2014/07/31/gumbel-max-trick/
@@ -104,6 +115,7 @@ def top2gating(
     mask2 = one_hot(indices2_s, num_experts)
 
     gates1_s = (gates * mask1).sum(dim=1)
+
     gates2_s = (gates * mask2).sum(dim=1)
 
     if normalize_gate_prob_before_dropping:
@@ -178,6 +190,7 @@ def top2gating(
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
+
     l_aux = torch.mean(me * ce)
     l_aux = l_aux * num_experts * num_experts
 
@@ -310,6 +323,7 @@ class Top2Gate(torch.nn.Module):
         batch_prioritized_routing=False,
         use_tutel=False,
         init_model_on_gpu=False,
+        analyse_moe_gating=False,
     ) -> None:
         super().__init__()
         self.wg = Linear(
@@ -321,6 +335,7 @@ class Top2Gate(torch.nn.Module):
         self.moe_eval_capacity_token_fraction = moe_eval_capacity_token_fraction
         self.batch_prioritized_routing = batch_prioritized_routing
         self.use_tutel = use_tutel
+        self.analyse = analyse_moe_gating
 
     def forward(self, input: torch.Tensor, mask: Optional[torch.Tensor] = None, moe_eval_capacity_length: Optional[int] = None, prefix_tokens: Optional[torch.Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
         logits = self.wg(input)
@@ -336,4 +351,5 @@ class Top2Gate(torch.nn.Module):
             moe_eval_capacity_length=moe_eval_capacity_length,
             use_tutel=self.use_tutel,
             prefix_tokens=prefix_tokens,
+            analyse=self.analyse,
         )

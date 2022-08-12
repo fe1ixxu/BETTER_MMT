@@ -10,6 +10,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from fairseq.data import (
     FairseqDataset,
@@ -248,6 +249,23 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
         return loss, sample_size, logging_output
 
+    def analysis_step(self, models, sample):
+        model = models[0]
+        model.train()
+        src_tokens = sample["net_input"]["src_tokens"]
+        tgt_tokens = sample["net_input"]["prev_output_tokens"]
+
+        with torch.no_grad():
+            decoder_out = model(**sample["net_input"])
+            # gather metadata
+            metadata, counters = gather_model_moe_metadata(
+                model,
+                len(self.source_dictionary),
+                src_tokens=src_tokens,
+                tgt_tokens=tgt_tokens,
+            )
+        return metadata, counters
+
     def inference_step(
         self, generator, models, sample, prefix_tokens=None, constraints=None
     ):
@@ -482,3 +500,59 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
             skip_remainder_batch=skip_remainder_batch,
         )
         return epoch_iter
+
+
+def gather_model_moe_metadata(model, vocab_size, src_tokens=None, tgt_tokens=None):
+    from fairseq.modules.moe import MOELayer
+
+    def shorten_name(name):
+        for sub in ["_fsdp_wrapped_module.", "_fpw_module.", "layers.", ".moe_layer"]:
+            name = name.replace(sub, "")
+        return name
+
+    moe_logging_output = {}
+    counters = {}
+
+    for key in ["soft_gates"]:
+        for name, module in model.named_modules():
+            if isinstance(module, MOELayer):
+                if key in module.metadata:
+                    # assuming one-dataset per batch:
+                    val = module.metadata[key]
+                    num_tokens = val.shape[0]
+                    val = val.sum(dim=0)
+                    moe_logging_output[f"{key}_{shorten_name(name)}"] = val
+                    counters[f"{key}_{shorten_name(name)}"] = num_tokens
+
+    # Experimental: looking at average expert assignment for each token in the vocabulary
+    # It is slow and dumps large vectors (V * E)
+    if 0:
+        # stats for each vocab token:
+        # sample src hot one
+        src_tokens = F.one_hot(src_tokens.reshape(-1), vocab_size)
+        # sample tgt hot one
+        tgt_tokens = F.one_hot(tgt_tokens.reshape(-1), vocab_size)
+
+        key = "soft_gates"
+        for name, module in model.named_modules():
+            if isinstance(module, MOELayer):
+                if key in module.metadata:
+                    # assuming one-dataset per batch:
+                    val = module.metadata[key]
+
+                    # aggregate by token index before summing
+                    if "encoder" in name:
+                        token_gates = torch.mm(src_tokens.t().float(), val)
+                        num_tokens_by_index = src_tokens.sum(dim=0)
+                        print("num tok per index", num_tokens_by_index.shape)
+                    else:
+                        token_gates = torch.mm(tgt_tokens.t().float(), val)  # V,E
+                        num_tokens_by_index = tgt_tokens.sum(dim=0)  # V
+                        print("num tok per index", num_tokens_by_index.shape)
+
+                    moe_logging_output[
+                        f"token_gates_{shorten_name(name)}"
+                    ] = token_gates
+                    counters[f"token_gates_{shorten_name(name)}"] = num_tokens_by_index
+
+    return moe_logging_output, counters

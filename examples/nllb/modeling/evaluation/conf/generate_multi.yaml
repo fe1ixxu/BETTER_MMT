@@ -29,3 +29,4 @@ finetune_dict_specs: null
 add_data_source_prefix_tags: false
 moe_eval_cap : 1.0
 datalabel: ""
+pivot_lang: eng_Latn

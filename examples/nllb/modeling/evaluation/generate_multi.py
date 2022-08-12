@@ -68,6 +68,7 @@ class GenerateMultiConfig:
     add_data_source_prefix_tags: bool = False
     moe_eval_cap: float = 1.0
     datalabel: str = ""
+    pivot_lang: str = "eng_Latn"
 
 
 @dataclass
@@ -244,6 +245,7 @@ class GenerateMultiModule(stopes.core.StopesModule):
                     " --sacrebleu "
                     " --enable-m2m-validation "
                     f"{'--add-data-source-prefix-tags' if self.config.add_data_source_prefix_tags else ''}"
+                    f" --multilingual-data-pivot-lang {self.config.pivot_lang} "
                     f" {'--fp16' if self.config.fp16 else ''}"
                     f" {moe_params} "
                     f" {finetune_dict_specs} "

@@ -213,6 +213,7 @@ class TransformerEncoderLayerBase(nn.Module):
                     cfg.moe_batch_prioritized_routing,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=cfg.init_model_on_gpu,
+                    analyse_moe_gating=cfg.analyse_moe_gating,
                 )
             experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
             self.moe_layer = MOELayer(
@@ -630,6 +631,7 @@ class TransformerDecoderLayerBase(nn.Module):
                     cfg.moe_batch_prioritized_routing,
                     use_tutel=cfg.use_tutel_moe,
                     init_model_on_gpu=init_model_on_gpu,
+                    analyse_moe_gating=cfg.analyse_moe_gating,
                 )
             experts = make_experts(cfg, self.embed_dim, ffn_dim, self.dropout_module)
             self.moe_layer = MOELayer(
