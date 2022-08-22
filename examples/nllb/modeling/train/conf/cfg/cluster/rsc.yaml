@@ -2,3 +2,4 @@ cluster_name: rsc
 partition: learn
 memory_multiplier: 50
 timeout_min: 1000
+constraint: null

@@ -23,6 +23,7 @@ class ClusterConfig:
     partition: str = MISSING
     memory_multiplier: int = 0
     timeout_min: int = 1000
+    constraint: tp.Optional[str] = None
 
 
 @dataclass
@@ -107,6 +108,10 @@ class TrainConfig:
 @dataclass
 class MainConfig:
     cfg: TrainConfig = TrainConfig()
+
+
+def maybe_set_param(flag, current="", val=""):
+    return f"{current} {val}" if flag else current
 
 
 class TrainModule(StopesModule):
@@ -210,16 +215,21 @@ class TrainModule(StopesModule):
                 --mask-random 0.1 \
                 --poisson-lambda 3.5"""
 
-        eval_params = ""
-        if cfg.eval.eval_bleu:
-            eval_params += "--eval-bleu "
-        if cfg.eval.eval_bleu_print_samples:
-            eval_params += "--eval-bleu-print-samples "
+        eval_params = maybe_set_param(cfg.eval.eval_bleu, val="--eval-bleu")
+        eval_params = maybe_set_param(
+            cfg.eval.eval_bleu_print_samples,
+            current=eval_params,
+            val="--eval-bleu-print-samples",
+        )
+        constraint_params = maybe_set_param(
+            cfg.cluster.constraint, val=f"--constraint {cfg.cluster.constraint}"
+        )
 
         sweep_command = f"""
             cd {cfg.fairseq_root}
             python -m {cfg.module_name} \
                 -d {self.data_dir} \
+                {constraint_params} \
                 -p {cfg.train_prefix} \
                 --checkpoints-dir {self.output_dir} \
                 {log_dir_str} \
