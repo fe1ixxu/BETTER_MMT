@@ -5,13 +5,16 @@
 
 import datetime
 import itertools
+import json
 import logging
 import time
+from argparse import Namespace
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
+from fairseq import metrics, utils
 from fairseq.data import (
     FairseqDataset,
     LanguagePairDataset,
@@ -37,6 +40,8 @@ def get_time_gap(s, e):
 
 ###
 
+EVAL_BLEU_ORDER = 4
+MINED_DATA_TAG = torch.tensor([45, 50, 248120, 49, 248123]).int().cpu()
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +85,24 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         parser.add_argument('--one-dataset-per-batch', action='store_true',
                             help='limit each minibatch to one sub-dataset (typically lang direction)')
 
+        parser.add_argument('--eval-bleu', action='store_true',
+                            help='evaluation with BLEU scores')
+        parser.add_argument('--eval-bleu-args', default='{}',
+                            help='generation args for BLUE scoring, e.g., \'{"beam": 4, "lenpen": 0.6}\', as JSON string')
+        parser.add_argument('--eval-bleu-all-same-batch', action='store_true',
+                            help='All GPUs compute the same batch. '
+                            'Required for MOE to ensure that all GPUs make the same number of all2all calls during generation')
+        parser.add_argument('--eval-bleu-remove-bpe', default=None, action="store_const",
+                            help="remove BPE before computing BLEU", const="@@ ")
+        parser.add_argument('--eval-tokenized-bleu', action='store_true',
+                            help="compute tokenized BLEU instead of sacrebleu. Use together with --eval-bleu-detok=space, to calculate spBLEU")
+        parser.add_argument('--eval-bleu-detok', default='space',
+                            help="detokenize before computing BLEU (e.g., 'moses'); required if using --eval-bleu; "
+                            "'space' to disable detokenization, e.g., when using SPM. "
+                            "use 'space' to disable detokenization; see fairseq.data.encoders for other options")
+        parser.add_argument('--eval-bleu-print-samples', action='store_true',
+                            help="print sample generations during validation")
+
         SamplingMethod.add_arguments(parser)
         MultilingualDatasetManager.add_args(parser)
         # fmt: on
@@ -113,6 +136,13 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         )
         self.lang_idx = self.get_lang_idx()
         self.one_dataset_per_batch = getattr(args, "one_dataset_per_batch", False)
+        self.eval_bleu = args.eval_bleu
+        self.eval_bleu_args = args.eval_bleu_args
+        self.eval_bleu_all_same_batch = args.eval_bleu_all_same_batch
+        self.eval_bleu_remove_bpe = args.eval_bleu_remove_bpe
+        self.eval_tokenized_bleu = args.eval_tokenized_bleu
+        self.eval_bleu_detok = args.eval_bleu_detok
+        self.eval_bleu_print_samples = args.eval_bleu_print_samples
 
     def get_lang_idx(self):
         lang_idx = torch.zeros(len(self.langs) + 1, dtype=torch.int32)
@@ -229,7 +259,12 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         seq_gen_cls=None,
         extra_gen_cls_kwargs=None,
     ):
-        if not getattr(args, "keep_inference_langtok", False):
+        keep_langtok_in_output = getattr(args, "keep_inference_langtok", False) or (
+            self.eval_bleu and models[0].training
+        )
+        # langtok is required for eval_bleu in order to process
+        # tokenized sentence correctly
+        if not keep_langtok_in_output:
             _, tgt_langtok_spec = self.args.langtoks["main"]
             if tgt_langtok_spec:
                 tgt_lang_tok = self.data_manager.get_decoder_langtok(
@@ -243,28 +278,91 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         )
 
     def build_model(self, args, from_checkpoint=False):
-        return super().build_model(args, from_checkpoint)
+        model = super().build_model(args, from_checkpoint)
+        if self.eval_bleu:
+            self.tokenizer = super().build_tokenizer(
+                Namespace(tokenizer=self.eval_bleu_detok)
+            )
+
+            generation_args = json.loads(self.eval_bleu_args)
+            self.sequence_generator = self.build_generator(
+                [model],
+                Namespace(**vars(args), **generation_args),
+            )
+        return model
 
     def valid_step(self, sample, model, criterion):
         loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
+        if self.eval_bleu:
+            bleu = self._inference_with_bleu(self.sequence_generator, sample, model)
+            logging_output["_bleu_sys_len"] = bleu.sys_len
+            logging_output["_bleu_ref_len"] = bleu.ref_len
+            # we split counts into separate entries so that they can be
+            # summed efficiently across workers using fast-stat-sync
+            assert len(bleu.counts) == EVAL_BLEU_ORDER
+            for i in range(EVAL_BLEU_ORDER):
+                logging_output["_bleu_counts_" + str(i)] = bleu.counts[i]
+                logging_output["_bleu_totals_" + str(i)] = bleu.totals[i]
+
         return loss, sample_size, logging_output
 
-    def analysis_step(self, models, sample):
-        model = models[0]
-        model.train()
-        src_tokens = sample["net_input"]["src_tokens"]
-        tgt_tokens = sample["net_input"]["prev_output_tokens"]
+    def _inference_with_bleu(self, generator, sample, model):
+        import sacrebleu
 
-        with torch.no_grad():
-            decoder_out = model(**sample["net_input"])
-            # gather metadata
-            metadata, counters = gather_model_moe_metadata(
-                model,
-                len(self.source_dictionary),
-                src_tokens=src_tokens,
-                tgt_tokens=tgt_tokens,
+        # extract the langtok from the sample: assumes the langtok is prepended
+        assert self.args.decoder_langtok
+        prefix_tokens = sample["target"][:, 0]
+        symbols_to_ignore = prefix_tokens.tolist()
+        prefix_tokens = prefix_tokens.resize(prefix_tokens.size(0), 1)
+
+        def decode(toks, escape_unk=False, remove_mined_data_tag=False):
+            toks = toks.int().cpu()
+
+            # workaround to remove <MINED_DATA> tag
+            # see:
+            # https://fburl.com/bzmkry8j and
+            # https://github.com/fairinternal/fairseq-py/pull/3327
+            if (
+                remove_mined_data_tag
+                and len(toks) >= 6
+                and torch.equal(toks[1:6], MINED_DATA_TAG)
+            ):
+                toks = torch.cat((toks[0:1], toks[6:]), dim=0)
+
+            s = self.target_dictionary.string(
+                toks,
+                self.eval_bleu_remove_bpe,
+                # The default unknown string in fairseq is `<unk>`, but
+                # this is tokenized by sacrebleu as `< unk >`, inflating
+                # BLEU scores. Instead, we use a somewhat more verbose
+                # alternative that is unlikely to appear in the real
+                # reference, but doesn't get split into multiple tokens.
+                unk_string=("UNKNOWNTOKENINREF" if escape_unk else "UNKNOWNTOKENINHYP"),
+                extra_symbols_to_ignore=symbols_to_ignore,
             )
-        return metadata, counters
+            if self.tokenizer:
+                s = self.tokenizer.decode(s)
+            return s
+
+        gen_out = self.inference_step(
+            generator, [model], sample, prefix_tokens=prefix_tokens
+        )
+        hyps, refs = [], []
+        for i in range(len(gen_out)):
+            hyps.append(decode(gen_out[i][0]["tokens"], remove_mined_data_tag=True))
+            refs.append(
+                decode(
+                    utils.strip_pad(sample["target"][i], self.target_dictionary.pad()),
+                    escape_unk=True,  # don't count <unk> as matches to the hypo
+                )
+            )
+        if self.eval_bleu_print_samples:
+            logger.info("example hypothesis: " + hyps[0])
+            logger.info("example reference: " + refs[0])
+        if self.eval_tokenized_bleu:
+            return sacrebleu.corpus_bleu(hyps, [refs], force=True, tokenize="none")
+        else:
+            return sacrebleu.corpus_bleu(hyps, [refs], force=True)
 
     def inference_step(
         self, generator, models, sample, prefix_tokens=None, constraints=None
@@ -299,6 +397,23 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
                     else self.target_dictionary.eos(),
                 )
 
+    def analysis_step(self, models, sample):
+        model = models[0]
+        model.train()
+        src_tokens = sample["net_input"]["src_tokens"]
+        tgt_tokens = sample["net_input"]["prev_output_tokens"]
+
+        with torch.no_grad():
+            decoder_out = model(**sample["net_input"])
+            # gather metadata
+            metadata, counters = gather_model_moe_metadata(
+                model,
+                len(self.source_dictionary),
+                src_tokens=src_tokens,
+                tgt_tokens=tgt_tokens,
+            )
+        return metadata, counters
+
     def reduce_metrics(self, logging_outputs, criterion):
         super().reduce_metrics(logging_outputs, criterion)
 
@@ -314,6 +429,10 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
     def target_dictionary(self):
         return self.data_manager.get_target_dictionary(self.target_langs[0])
 
+    def split_for_dataset(self, dataset):
+        splits = [s for s, _ in self.datasets.items() if self.datasets[s] == dataset]
+        return splits[0] if len(splits) > 0 else None
+
     def create_batch_sampler_func(
         self,
         max_positions,
@@ -324,10 +443,7 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         seed=1,
     ):
         def construct_batch_sampler(dataset, epoch):
-            splits = [
-                s for s, _ in self.datasets.items() if self.datasets[s] == dataset
-            ]
-            split = splits[0] if len(splits) > 0 else None
+            split = self.split_for_dataset(dataset)
             # NEW implementation
             if epoch is not None:
                 # initialize the dataset with the correct starting epoch
@@ -458,6 +574,14 @@ class TranslationMultiSimpleEpochTask(LegacyFairseqTask):
         assert isinstance(dataset, FairseqDataset)
         if dataset in self.dataset_to_epoch_iter:
             return self.dataset_to_epoch_iter[dataset]
+
+        # required for MOE
+        split = self.split_for_dataset(dataset)
+        is_valid = "valid" in split if split is not None else False
+        if self.eval_bleu and self.eval_bleu_all_same_batch and is_valid:
+            num_shards = 1
+            shard_id = 0
+
         if self.args.sampling_method == "RoundRobin":
             batch_iter = super().get_batch_iterator(
                 dataset,

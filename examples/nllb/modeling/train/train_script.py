@@ -46,10 +46,17 @@ class ModelTypeConfig:
 
 
 @dataclass
+class EvalConfig:
+    eval_bleu: bool = False
+    eval_bleu_print_samples: bool = False
+
+
+@dataclass
 class TrainConfig:
     cluster: ClusterConfig = ClusterConfig()
     dataset: DatasetConfig = DatasetConfig()
     model_type: ModelTypeConfig = ModelTypeConfig()
+    eval: EvalConfig = EvalConfig()
     fairseq_root: str = MISSING
     output_dir: str = MISSING
     log_dir: str = None
@@ -203,6 +210,12 @@ class TrainModule(StopesModule):
                 --mask-random 0.1 \
                 --poisson-lambda 3.5"""
 
+        eval_params = ""
+        if cfg.eval.eval_bleu:
+            eval_params += "--eval-bleu "
+        if cfg.eval.eval_bleu_print_samples:
+            eval_params += "--eval-bleu-print-samples "
+
         sweep_command = f"""
             cd {cfg.fairseq_root}
             python -m {cfg.module_name} \
@@ -263,7 +276,8 @@ class TrainModule(StopesModule):
                 {f"--log-interval {cfg.log_interval}" if cfg.log_interval is not None else ""} \
                 {f"--eval-lang-pairs {cfg.eval_lang_pairs}" if cfg.eval_lang_pairs is not None else ""} \
                 {"--reset-dataloader" if cfg.reset_dataloader else ""} \
-                {"--reset-all" if cfg.reset_all else ""}
+                {"--reset-all" if cfg.reset_all else ""} \
+                {eval_params}
         """
 
         print("RUNNING SWEEP COMMAND:")

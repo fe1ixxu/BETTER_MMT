@@ -2,6 +2,7 @@ defaults:
   - cluster: fair
   - dataset: flores125.en_xx_en.v3.3
   - model_type: dense
+  - eval: default
   - _self_
 
 fairseq_root: ???

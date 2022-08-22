@@ -14,6 +14,8 @@ from fairseq.criterions import FairseqCriterion, MoECriterionConfig, register_cr
 from fairseq.logging.meters import GroupedAverageMeter
 from fairseq.modules.moe import MOELayer
 
+from .bleu_score_helper import maybe_compute_bleu
+
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
     if target.dim() == lprobs.dim() - 1:
@@ -348,6 +350,8 @@ class MoELabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 if meters["total"].sum > 0
                 else float("nan"),
             )
+
+        maybe_compute_bleu(logging_outputs)
 
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:

@@ -307,6 +307,14 @@ def add_extra_options_func(parser):
         default=None,
         help="Number of experts per MoE layer",
     )
+    parser.add_argument("--moe-gate-loss-wt", type=float, default=0.01)
+    parser.add_argument("--moe-eom", type=float, default=0.0)
+    parser.add_argument("--moe-cmr", action="store_true", default=0.0)
+    parser.add_argument("--cmr-wt", type=float, default=0.1)
+    parser.add_argument("--cmr-p", type=float, default=0.8)
+    parser.add_argument("--cmr-gate-drop", type=float, default=0.0)
+    parser.add_argument("--moe-local-drop", type=float, default=0.0)
+    parser.add_argument("--replication-count", type=int, default=1)
 
     # Validate over all xx-yy pairs
     parser.add_argument(
@@ -359,17 +367,29 @@ def add_extra_options_func(parser):
         help="log updates interval",
     )
 
-    parser.add_argument("--moe-gate-loss-wt", type=float, default=0.01)
-    parser.add_argument("--moe-eom", type=float, default=0.0)
-    parser.add_argument("--moe-cmr", action="store_true", default=0.0)
-    parser.add_argument("--cmr-wt", type=float, default=0.1)
-    parser.add_argument("--cmr-p", type=float, default=0.8)
-    parser.add_argument("--cmr-gate-drop", type=float, default=0.0)
-    parser.add_argument("--moe-local-drop", type=float, default=0.0)
-    parser.add_argument("--replication-count", type=int, default=1)
+    # Eval
+    parser.add_argument(
+        "--eval-bleu",
+        default=False,
+        action="store_true",
+        help="whether to compute and log eval BLEU scores",
+    )
+    parser.add_argument(
+        "--eval-bleu-print-samples",
+        default=False,
+        action="store_true",
+        help="print sample generations during validation",
+    )
 
 
 def get_grid(args):
+    """Produces an n-dimensional grid based on the arguments given to the sweep module
+    and a set of predefined `hyperparam`s registered via `@register_grid`.
+
+    The sweep module already defines a list of common arguments. We augment that list
+    via the callback `add_extra_options_func()` which adds parameters specific to MMT.
+    """
+
     task = args.task
     sampling_method = args.sampling_method
     sampling_temperature = args.sampling_temperature
@@ -754,6 +774,14 @@ def get_grid(args):
                 # save_dir_key=lambda val: f"ts_{val}",
             )
         )
+
+    if args.eval_bleu:
+        grids.append(hyperparam("--eval-bleu"))
+        grids.append(hyperparam("--eval-tokenized-bleu"))
+        if args.eval_bleu_print_samples:
+            grids.append(hyperparam("--eval-bleu-print-samples"))
+        if args.moe:
+            grids.append(hyperparam("--eval-bleu-all-same-batch"))
 
     return grids
 

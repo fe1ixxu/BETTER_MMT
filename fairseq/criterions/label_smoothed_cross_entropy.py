@@ -13,6 +13,8 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from fairseq.dataclass import FairseqDataclass
 
+from .bleu_score_helper import maybe_compute_bleu
+
 
 @dataclass
 class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
@@ -160,6 +162,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 if meters["total"].sum > 0
                 else float("nan"),
             )
+
+        maybe_compute_bleu(logging_outputs)
 
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:
