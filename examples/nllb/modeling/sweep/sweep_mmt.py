@@ -375,6 +375,12 @@ def add_extra_options_func(parser):
         help="whether to compute and log eval BLEU scores",
     )
     parser.add_argument(
+        "--eval-bleu-args",
+        default=None,
+        type=str,
+        help='generation args for BLUE scoring, e.g., \'{"beam": 4, "lenpen": 0.6}\', as JSON string',
+    )
+    parser.add_argument(
         "--eval-bleu-print-samples",
         default=False,
         action="store_true",
@@ -778,6 +784,8 @@ def get_grid(args):
     if args.eval_bleu:
         grids.append(hyperparam("--eval-bleu"))
         grids.append(hyperparam("--eval-tokenized-bleu"))
+        if args.eval_bleu_args:
+            grids.append(hyperparam("--eval-bleu-args", args.eval_bleu_args))
         if args.eval_bleu_print_samples:
             grids.append(hyperparam("--eval-bleu-print-samples"))
         if args.moe:

@@ -7,6 +7,7 @@
 import asyncio
 import os
 import subprocess
+import shlex
 import typing as tp
 from dataclasses import dataclass
 from random import randint
@@ -49,6 +50,7 @@ class ModelTypeConfig:
 @dataclass
 class EvalConfig:
     eval_bleu: bool = False
+    eval_bleu_args: str = MISSING
     eval_bleu_print_samples: bool = False
 
 
@@ -216,6 +218,11 @@ class TrainModule(StopesModule):
                 --poisson-lambda 3.5"""
 
         eval_params = maybe_set_param(cfg.eval.eval_bleu, val="--eval-bleu")
+        eval_params = maybe_set_param(
+            cfg.eval.eval_bleu_args,
+            current=eval_params,
+            val=f"--eval-bleu-args {shlex.quote(cfg.eval.eval_bleu_args)}",
+        )
         eval_params = maybe_set_param(
             cfg.eval.eval_bleu_print_samples,
             current=eval_params,
