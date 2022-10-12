@@ -40,6 +40,7 @@ from .transformer_sentence_encoder import TransformerSentenceEncoder
 from .transpose_last import TransposeLast
 from .unfold import unfold1d
 from .transformer_layer import TransformerDecoderLayer, TransformerEncoderLayer
+from .transformer_layer_ed import TransformerDecoderLayerED, TransformerEncoderLayerED
 from .vggblock import VGGBlock
 from .espnet_multihead_attention import (
     ESPNETMultiHeadedAttention,
@@ -92,6 +93,8 @@ __all__ = [
     "TransformerSentenceEncoder",
     "TransformerDecoderLayer",
     "TransformerEncoderLayer",
+    "TransformerDecoderLayerED",
+    "TransformerEncoderLayerED",
     "TransposeLast",
     "VGGBlock",
     "unfold1d",

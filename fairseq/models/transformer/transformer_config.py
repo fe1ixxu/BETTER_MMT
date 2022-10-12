@@ -371,6 +371,14 @@ class TransformerConfig(FairseqDataclass):
         default=False, metadata={"help": "use Megatron softmax kernel"}
     )
 
+    run_ed: bool = field(
+        default=False, metadata={"help": "whether run with expert distillation"}
+    )
+
+    ed_method: str = field(
+        default="mse", metadata={"help": "Method for calculating ed loss"}
+    )
+
     no_emb_dropout: Optional[bool] = field(
         default=False, metadata={"help": "Avoid emb dropout for decoder"}
     )

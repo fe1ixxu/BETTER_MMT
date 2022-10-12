@@ -12,6 +12,8 @@ from .transformer_config import (
 )
 from .transformer_decoder import TransformerDecoder, TransformerDecoderBase, Linear
 from .transformer_encoder import TransformerEncoder, TransformerEncoderBase
+from .transformer_encoder_ed import TransformerEncoderED, TransformerEncoderBaseED
+from .transformer_decoder_ed import TransformerDecoderED, TransformerDecoderBaseED
 from .transformer_legacy import (
     TransformerModel,
     base_architecture,
@@ -23,6 +25,11 @@ from .transformer_legacy import (
     transformer_wmt_en_de_big,
     transformer_wmt_en_de_big_t2t,
 )
+
+from .transformer_legacy_ed import (
+    TransformerModelED,
+)
+
 from .transformer_base import TransformerModelBase, Embedding
 
 
@@ -30,8 +37,10 @@ __all__ = [
     "TransformerModelBase",
     "TransformerConfig",
     "TransformerDecoder",
+    "TransformerDecoderED",
     "TransformerDecoderBase",
     "TransformerEncoder",
+    "TransformerEncoderED",
     "TransformerEncoderBase",
     "TransformerModel",
     "Embedding",
