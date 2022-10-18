@@ -32,11 +32,26 @@ def _linear(x, weight, bias=None):
 
 def ed_loss_cal(x1, x2, method):
     if method == "mse":
-        return torch.mean((x1-x2)**2)
-    else:
-        cs = torch.cosine_similarity(x1, x2, dim=-1)
+        return torch.mean((x1.float()-x2.float())**2)
+    elif method == "cs":
+        cs = torch.cosine_similarity(x1.float(), x2.float(), dim=-1)
         return torch.mean((1. - cs)**2)
+    elif method == "ce":
+        dim = x1.shape[-1]
+        x1 = x1.view(-1, dim)
+        x2 = x2.view(-1, dim)
+        target = torch.ones(x1.shape[0]).to(x1.device)
+        return torch.nn.functional.cosine_embedding_loss(x1, x2, target)
+    elif method == "x":
+        x1 = F.softmax(x1.float(), dim=-1)
+        x2 = F.softmax(x2.float(), dim=-1)
+        m = (x1 + x2) / 2
 
+        kl_all = 0
+        for l in [x1, x2]:
+            d = (l-m) * (torch.log(l) - torch.log(m))
+            kl_all += d.sum()
+        return kl_all / 2
 
 def _ffn(
     x,
@@ -250,6 +265,7 @@ class TransformerEncoderLayerBaseED(nn.Module):
         self.run_ed = cfg.run_ed
         self.ed_method = cfg.ed_method
         if self.run_ed and self.is_moe_layer:
+            self.ed_layernorm = LayerNorm(self.embed_dim)
             self.activation_fn = utils.get_activation_fn(
                 activation=str(cfg.activation_fn)
                 if cfg.activation_fn is not None
@@ -482,13 +498,13 @@ class TransformerEncoderLayerBaseED(nn.Module):
         x = x.transpose(0, 1)  # seq_len, batch_size, model_dim
         return x, fc_result, l_aux
     def forward_moe_ed(self, x, tokens, fc3, activation_fn):
+        x2 = x.detach()
         x1, fc_result, l_aux = self.forward_moe(
             x,
             tokens,
         )
-        x2 = x.detach()
         x2, _, l_aux2 = self.forward_moe(
-            x,
+            x2,
             tokens,
         )
 
@@ -511,14 +527,11 @@ class TransformerEncoderLayerBaseED(nn.Module):
 
         x = (x1 + x2) / 2
         x1 = x2 + (x1 - x2).detach()
+        x = self.ed_layernorm(x)
+        
         ## ED loss:
         l_ed = ed_loss_cal(x1, x2, self.ed_method)
         l_aux["ed_loss"] = l_ed
-
-        # if str(x1.device) == "cuda:0" and str(x2.device) == "cuda:0":
-        #     print("x1", l_aux["soft_gates"])
-        #     print("x2", l_aux2["soft_gates"])
-        #     print(l_ed)
 
         return x, fc_result, l_aux
 
@@ -751,6 +764,7 @@ class TransformerDecoderLayerBaseED(nn.Module):
         self.run_ed = cfg.run_ed
         self.ed_method = cfg.ed_method
         if self.run_ed and self.is_moe_layer:
+            self.ed_layernorm = LayerNorm(self.embed_dim)
             self.activation_fn = utils.get_activation_fn(
                 activation=str(cfg.activation_fn)
                 if cfg.activation_fn is not None
@@ -1067,9 +1081,11 @@ class TransformerDecoderLayerBaseED(nn.Module):
             x1 = _linear(x1, fc3.weight, fc3.bias)
             x2 = activation_fn(x2)
             x2 = _linear(x2, fc3.weight, fc3.bias)
-
-        x = x1
+        
+        x = (x1 + x2) / 2 
         x1 = x2 + (x1 - x2).detach()
+        x = self.ed_layernorm(x)
+        
         ## ED loss:
         l_ed = ed_loss_cal(x1, x2, self.ed_method)
         l_aux["ed_loss"] = l_ed
