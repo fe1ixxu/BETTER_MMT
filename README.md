@@ -8,6 +8,8 @@ conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit
 pip install -e ./
 ```
 
+Copy model files to your local folder: `cp /brtx/601-nvme1/haoranxu/BETTER_MMT/models/m6_moe_eom_4_xxl/ ${YOUR_BETTER_MMT}`
+
 ## Translate from xxx<->eng
 To translate from any languauge from or to English, run the command:
 ```
