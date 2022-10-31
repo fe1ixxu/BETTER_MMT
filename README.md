@@ -14,7 +14,7 @@ pip install -e ./
 Copy model files to your local folder: `cp /brtx/601-nvme1/haoranxu/BETTER_MMT/models/m6_moe_eom_4_xxl/ ${YOUR_BETTER_MMT}`
 
 ## Translate from xxx<->eng
-To translate from any languauge from or to English, run the command:
+To translate from any languauge from or to English, run the command (**Note that you should have at least 2^n(n>1) GPUs to use the model to translate, e.g., 2, 4, 8, 16....**):
 ```
 bash translate.sh ${INPUT} ${OUTPUT} ${SRC_LANG} ${TGT_LANG} ${MODEL_PATH}
 ```
