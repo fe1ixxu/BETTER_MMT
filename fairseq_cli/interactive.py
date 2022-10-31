@@ -142,6 +142,15 @@ def main(cfg: FairseqConfig):
     # Load ensemble
     overrides = ast.literal_eval(cfg.common_eval.model_overrides)
     logger.info("loading model(s) from {}".format(cfg.common_eval.path))
+    if (
+        cfg.common_eval.is_moe
+        and torch.distributed.is_initialized()
+        and torch.distributed.get_world_size() > 1
+    ):
+        cfg.checkpoint.checkpoint_suffix = f"-rank-{torch.distributed.get_rank()}"
+        moe_freq = 1
+    else:
+        moe_freq = 0
     models, _model_args = checkpoint_utils.load_model_ensemble(
         utils.split_paths(cfg.common_eval.path),
         arg_overrides=overrides,
@@ -149,6 +158,7 @@ def main(cfg: FairseqConfig):
         suffix=cfg.checkpoint.checkpoint_suffix,
         strict=(cfg.checkpoint.checkpoint_shard_count == 1),
         num_shards=cfg.checkpoint.checkpoint_shard_count,
+        is_moe=moe_freq > 0,
     )
 
     # Set dictionaries
