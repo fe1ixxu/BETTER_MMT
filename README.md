@@ -1,3 +1,6 @@
+## Introduction
+This multilingual machine translation model is trained on 12 layers with 4 experts and total 73 million parallel dataset.
+
 ## Environment:
 ```
 conda create -n better-moe python=3.8
