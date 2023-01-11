@@ -6,6 +6,7 @@ LANG_PAIRS='fas-eng,zho_Hans-eng,rus-eng,kor-eng,ara_Arab-eng,eng-fas,eng-zho_Ha
 SAVE_PATH=./models/m6_moe_eom_4_xxl/
 EXPERT_NUM=4
 RANDOM_PORT=175$(( $RANDOM % 50 + 1 ))
+AVAILABLE_GPU=4
 
 SRCS='fas,zho_Hans,rus,kor,ara_Arab'
 tgt=eng
@@ -29,7 +30,7 @@ for src in ${SRCS//,/ }; do
         --bpe "sentencepiece" \
         --sentencepiece-model ${DATA_DIR}/vocab_bin/sentencepiece.source.64000.model \
         --source-lang ${src} --target-lang ${tgt} \
-        --distributed-world-size 32 --distributed-port ${RANDOM_PORT} \
+        --distributed-world-size ${AVAILABLE_GPU} --distributed-port -1 \
         --batch-size 100  \
         --model-overrides "{'world_size': 32, 'moe_eval_capacity_token_fraction': 1.0, 'use_moe_pad_mask': False, 'pass_tokens_transformer_layer': False, 'replication_count': ${replication_count}}" \
         --no-progress-bar |\
@@ -55,7 +56,7 @@ for tgt in ${TGTS//,/ }; do
         --encoder-langtok tgt --decoder-langtok \
         --sentencepiece-model ${DATA_DIR}/vocab_bin/sentencepiece.source.64000.model \
         --source-lang ${src} --target-lang ${tgt} \
-        --distributed-world-size 32 --distributed-port ${RANDOM_PORT} \
+        --distributed-world-size ${AVAILABLE_GPU} --distributed-port -1 \
         --batch-size 100 \
         --model-overrides "{'world_size': 32, 'moe_eval_capacity_token_fraction': 1.0, 'use_moe_pad_mask': False, 'pass_tokens_transformer_layer': False, 'replication_count': ${replication_count}}" \
         --no-progress-bar |\

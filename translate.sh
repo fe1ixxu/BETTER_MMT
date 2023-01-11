@@ -13,6 +13,7 @@ SAVE_PATH=${DATA_DIR}
 EXPERT_NUM=4
 RANDOM_PORT=175$(( $RANDOM % 50 + 1 ))
 replication_count=$[ 32 / ${EXPERT_NUM} ]
+AVAILABLE_GPU=4
 
 mkdir tmp_workplace
 python scripts/spm_encode.py \
@@ -37,7 +38,7 @@ fairseq-generate  tmp_workplace/data-bin/ --path $SAVE_PATH/checkpoint_best.pt \
     --bpe "sentencepiece" \
     --sentencepiece-model ${DATA_DIR}/vocab_bin/sentencepiece.source.64000.model \
     --source-lang ${src} --target-lang ${tgt} \
-    --distributed-world-size 32 --distributed-port ${RANDOM_PORT} \
+    --distributed-world-size ${AVAILABLE_GPU} --distributed-port -1 \
     --batch-size 100  \
     --model-overrides "{'world_size': 32, 'moe_eval_capacity_token_fraction': 1.0, 'use_moe_pad_mask': False, 'pass_tokens_transformer_layer': False, 'replication_count': ${replication_count}}" \
     --no-progress-bar  > tmp_workplace/tmp.output
