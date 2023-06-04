@@ -1,5 +1,5 @@
 ## Introduction
-This multilingual machine translation model is trained on 12 layers with 4 experts and total 73 million parallel dataset.
+This multilingual machine translation model is trained on 12 layers with 4 experts and total 73 million parallel dataset. One can download mmodel from google drive: https://drive.google.com/file/d/1pDH3zueCK9t4lHEvWsqjEPzh34PbISZY/view?usp=sharing or from our local machine if you have access: `/brtx/601-nvme1/haoranxu/BETTER_MMT/models/m6_moe_eom_4_xxl/`
 
 ## Environment:
 ```
@@ -10,8 +10,6 @@ git checkout origin/experts_lt_gpus_moe_reload_fix
 conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=10.2 -c pytorch
 pip install -e ./
 ```
-
-Copy model files to your local folder: `cp /brtx/601-nvme1/haoranxu/BETTER_MMT/models/m6_moe_eom_4_xxl/ ${YOUR_BETTER_MMT}`
 
 ## Translate from xxx<->eng
 To translate from any languauge from or to English, run the command (**Note that you should have at least 2^n(n>1) GPUs to use the model to translate, e.g., 2, 4, 8, 16....**):
